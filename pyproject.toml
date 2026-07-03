@@ -8,3 +8,6 @@ dependencies = [
     "arxiv-latex-cleaner>=1.0.11",
     "streamlit>=1.58.0",
 ]
+
+[tool.uv]
+package = false
