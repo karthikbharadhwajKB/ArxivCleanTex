@@ -105,6 +105,8 @@ class CleanResult:
     missing_bbl: bool = False
     # Name of the .bbl the app generated with BibTeX, if any.
     generated_bbl: str = ""
+    # Why the paper looks like an anonymous/line-numbered submission, if it does.
+    review_version: str = ""
 
 
 def _encode_back(text):
@@ -624,6 +626,62 @@ def find_dropped_files(original_root, cleaned_root, main_name):
     return sorted(dropped.items())
 
 
+def _package_options(text, package_pattern):
+    """Yields (options, name) for each package matching package_pattern that is
+    loaded with \\usepackage, including lists like \\usepackage{a,b}."""
+    package = re.compile(package_pattern)
+    for m in re.finditer(r"\\usepackage\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}", text):
+        options = [o.strip() for o in (m.group(1) or "").split(",") if o.strip()]
+        for name in (n.strip() for n in m.group(2).split(",")):
+            if package.fullmatch(name):
+                yield options, name
+
+
+def detect_review_version(text):
+    """Returns why `text` (cleaned LaTeX) is an anonymous or line-numbered
+    submission rather than a final version, with the fix, or "" if it is not."""
+    for options, _ in _package_options(text, "acl"):
+        if "review" in options:
+            return (
+                "it uses the ACL template's review option (anonymous, with line "
+                "numbers). Change \\usepackage[review]{acl} to "
+                "\\usepackage[preprint]{acl} (or [final])"
+            )
+    for _, name in _package_options(text, r"(?:acl|naacl|eacl|emnlp|aacl|coling)\d{4}"):
+        if "\\aclfinalcopy" not in text:
+            return (
+                f"it uses the {name} template without \\aclfinalcopy, so authors are "
+                "hidden. Add \\aclfinalcopy to the preamble"
+            )
+    for options, name in _package_options(text, r"neurips_\d{4}"):
+        if not {"final", "preprint"} & set(options):
+            return (
+                f"it uses the {name} template's submission mode (anonymous, with "
+                f"line numbers). Change it to \\usepackage[preprint]{{{name}}} (or [final])"
+            )
+    for options, name in _package_options(text, r"icml\d{4}"):
+        if "accepted" not in options:
+            return (
+                f"it uses the {name} template's submission mode (anonymous). "
+                f"Change it to \\usepackage[accepted]{{{name}}}"
+            )
+    for _, name in _package_options(text, r"iclr\d{4}_conference"):
+        if "\\iclrfinalcopy" not in text:
+            return (
+                f"it uses the {name} template without \\iclrfinalcopy, so authors are "
+                "hidden. Add \\iclrfinalcopy to the preamble"
+            )
+    for options, name in _package_options(text, r"cvpr|iccv|wacv|eccv"):
+        if "review" in options:
+            return (
+                f"it uses the {name} template's review option (anonymous, with line "
+                f"numbers). Change it to \\usepackage[final]{{{name}}}"
+            )
+    if re.search(r"\\linenumbers\b", text):
+        return "it turns on line numbers (\\linenumbers). Remove that line"
+    return ""
+
+
 _CITE = re.compile(r"\\(?:no)?cite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}")
 _BIBLATEX = re.compile(r"\\(?:addbibresource|printbibliography)\b")
 
@@ -864,6 +922,14 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
                     f"logs and files) and add {bbl.name} next to {main_tex.name}."
                 )
 
+        review_version = detect_review_version(
+            "\n".join(_strip_comments(_read_tex(p)) for p in sorted(cleaned.rglob("*.tex")))
+        )
+        if review_version:
+            warnings.append(
+                f"This looks like a submission version, not a final one: {review_version}."
+            )
+
         dropped = find_dropped_files(staged, cleaned, main_tex.name)
         for ref, reason in dropped[:10]:
             warnings.append(
@@ -894,4 +960,5 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
             dropped_files=[ref for ref, _ in dropped],
             missing_bbl=missing_bbl,
             generated_bbl=generated_bbl,
+            review_version=review_version,
         )

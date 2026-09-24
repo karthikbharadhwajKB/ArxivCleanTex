@@ -68,6 +68,12 @@ deleted right away.
   left out are reported, with the reason and how to fix it. Common causes:
   figures other than png/jpg/pdf referenced without their extension, style
   files in subfolders, or names with special characters.
+- **Review version:** warns when you're about to post the anonymous,
+  line-numbered submission instead of the final version. It knows the ACL,
+  NeurIPS, ICML, ICLR and CVPR/ICCV templates (e.g. `\usepackage[review]{acl}`,
+  `\usepackage{neurips_2024}` without `[preprint]`, ICLR without
+  `\iclrfinalcopy`) and `\linenumbers`, and names the one-line fix. It reads
+  the cleaned sources, so commented-out switches don't count.
 - **Other checks:** a missing `.bbl`, upper-case `.TEX` files (the cleaner
   skips them), and outputs over arXiv's 50 MB limit.
 
@@ -75,7 +81,7 @@ deleted right away.
 - **Before/after numbers:** files, total size, and how much the main `.tex`
   shrank.
 - **A readiness checklist:** main file, missing files, dropped files,
-  bibliography and size, each with ✅ or ⚠️.
+  bibliography, final version and size, each with ✅ or ⚠️.
 - **A file list:** every kept and removed file, with its size.
 
 **Stays faithful to `arxiv_latex_cleaner`**
@@ -121,8 +127,9 @@ The app then shows:
 - **Each flagged page,** with the problem areas marked in red.
 - **A downloadable report** (Markdown).
 
-It also recognises a **review version**: its line numbers show up as hundreds of
-margin errors, and the app says so instead of listing them all.
+It also recognises a **review version**, either from the "Anonymous …
+submission" author line on the first page or from its line numbers, which show
+up as hundreds of margin errors. The app says so instead of listing them all.
 
 **Check options**, all passed to aclpubcheck:
 - **Empty bottom margin:** checks that the bottom of each page is blank, because

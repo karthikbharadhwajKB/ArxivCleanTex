@@ -85,9 +85,10 @@ def render():
 
     if report.likely_review_version:
         st.warning(
-            "This looks like a **review version**: the line numbers in the margins are "
-            "reported as hundreds of margin errors. Switch your template to the final "
-            "version (e.g. `\\usepackage[final]{acl}`) and check again."
+            "This looks like a **review version**: it has an anonymous author line or "
+            "line numbers in the margins (which show up as hundreds of margin errors). "
+            "Switch your template to the final version (e.g. `\\usepackage[final]{acl}`) "
+            "and check again."
         )
     if report.passed:
         st.success("All clear! No formatting errors found.")

@@ -179,3 +179,44 @@ class TestRealCheck:
     def test_image_only_pdf(self):
         with pytest.raises(AclCheckFailedError, match="No text could be read"):
             check_pdf(image_pdf(), "long")
+
+
+# --- Anonymous first page ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, anonymous",
+    [
+        ("Anonymous ACL submission", True),
+        ("AnonymousACLsubmission", True),  # PDF text often loses spaces
+        ("Anonymous EMNLP 2025 submission", True),
+        ("Anonymous submission", True),
+        ("Anonymous authors", False),
+        ("anonymously submitted", False),
+        ("Anonymous reviewers of the submission process", False),
+    ],
+)
+def test_anonymous_pattern(text, anonymous):
+    assert bool(acl._ANONYMOUS.search(text)) == anonymous
+
+
+def test_unreadable_pdf_is_not_anonymous(tmp_path):
+    (tmp_path / "x.pdf").write_bytes(b"not a pdf")
+    assert not acl._anonymous_first_page(tmp_path / "x.pdf")
+
+
+def test_anonymous_first_page_marks_review_version(monkeypatch):
+    monkeypatch.setattr(acl.subprocess, "run", FakeRun(logs={}))
+    monkeypatch.setattr(acl, "_anonymous_first_page", lambda path: True)
+    report = check_pdf(b"%PDF-1.5")
+    assert report.likely_review_version and report.passed
+
+
+@needs_latex
+def test_anonymous_first_page_in_a_real_pdf(tmp_path):
+    pdf = latex_pdf(tmp_path, "\\begin{center}Anonymous ACL submission\\end{center}Text")
+    path = tmp_path / "check.pdf"
+    path.write_bytes(pdf)
+    assert acl._anonymous_first_page(path)
+    path.write_bytes(latex_pdf(tmp_path, "Jane Doe, University of Somewhere\n\nText"))
+    assert not acl._anonymous_first_page(path)

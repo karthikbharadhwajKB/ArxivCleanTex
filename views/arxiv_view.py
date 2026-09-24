@@ -208,6 +208,7 @@ def render():
             "Bibliography compiled"
             + (f" (`{result.generated_bbl}` generated)" if result.generated_bbl else ""),
         ),
+        (not result.review_version, "Final version, not the anonymous submission"),
         (size_out <= ARXIV_SIZE_LIMIT, "Under arXiv's 50 MB limit"),
     ]
     ready = all(ok for ok, _ in checks)
