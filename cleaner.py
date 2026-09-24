@@ -772,7 +772,9 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
                 "Rename them to .tex and update the references."
             )
 
-        missing, uses_bib = find_missing_files(root, main_tex)
+        # .bib files are not checked: arXiv never runs BibTeX, it only needs the
+        # .bbl (warned about below), so a .bib path cannot break the build.
+        missing, uses_bib = find_missing_files(root, main_tex, check_bib=False)
         bbl = main_tex.with_suffix(".bbl")
         if uses_bib and not bbl.is_file():
             warnings.append(
