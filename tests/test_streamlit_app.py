@@ -2,7 +2,7 @@ import pytest
 import streamlit
 from streamlit.testing.v1 import AppTest
 
-import cleaner
+from arxivcleantex import arxiv as cleaner
 from helpers import doc, make_zip, unzip
 
 APP = "streamlit_app.py"
