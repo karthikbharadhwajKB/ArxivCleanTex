@@ -265,13 +265,13 @@ streamlit_app.py             the page: header, mode cards, footer
 views/arxiv_view.py          “Prepare for arXiv”: options, cleaning, results
 views/acl_view.py            “Check ACL format”: options, check, report
 views/camera_ready_view.py   “ACL camera-ready”: both uploads, cross-checks, one verdict
+views/feedback_view.py       “Report this problem” buttons and the help section
 paperready/core.py           shared upload handling (safe unzip, OS-junk removal)
 paperready/arxiv.py          the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
 paperready/acl.py            the ACL check (runs aclpubcheck, groups results, page images)
 paperready/acl_runner.py     runs aclpubcheck in a separate process
 paperready/camera_ready.py   checks between the source and the PDF (same version, same paper)
 paperready/feedback.py       links that open a GitHub issue with the error filled in
-views/                       the app's pages: one per mode, plus the “report a problem” parts
 .streamlit/config.toml       the app's theme
 assets/                      icons: PaperReady (icon.svg + PNGs), arXiv (arxiv.svg), ACL (acl.svg)
 requirements.txt             Python dependencies for Streamlit Community Cloud
