@@ -6,6 +6,7 @@ a very slow PDF cannot take the app down.
 """
 
 import importlib.util
+import io
 import json
 import re
 import subprocess
@@ -115,16 +116,21 @@ def _looks_like_review_version(logs):
     return len(margin) >= _REVIEW_MIN_ERRORS and len(margin) >= _REVIEW_MIN_REPEATS * len(set(margin))
 
 
-def _anonymous_first_page(pdf_path):
-    """True if page 1 has an anonymous-submission author line."""
+def first_page_text(pdf):
+    """Text of page 1 of a PDF (path or bytes), or "" if it cannot be read."""
     try:
         import pdfplumber
 
-        with pdfplumber.open(pdf_path) as pdf:
-            text = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
+        source = io.BytesIO(pdf) if isinstance(pdf, bytes) else pdf
+        with pdfplumber.open(source) as document:
+            return (document.pages[0].extract_text() or "") if document.pages else ""
     except Exception:
-        return False
-    return bool(_ANONYMOUS.search(text))
+        return ""
+
+
+def _anonymous_first_page(pdf_path):
+    """True if page 1 has an anonymous-submission author line."""
+    return bool(_ANONYMOUS.search(first_page_text(pdf_path)))
 
 
 def check_pdf(

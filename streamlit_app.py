@@ -2,7 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from views import acl_view, arxiv_view
+from views import acl_view, arxiv_view, camera_ready_view
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -13,8 +13,8 @@ MODES = {
     "arxiv": {
         "logo": ASSETS / "arxiv.svg",
         "name": "Prepare for arXiv",
-        "summary": "Remove private comments and unused files, add the missing bibliography.",
-        "upload": "Your LaTeX project as a .zip",
+        "summary": "Strip comments and unused files, add the bibliography.",
+        "upload": "LaTeX project (.zip)",
         "steps": [
             ("📦", "Upload", "Your project as a .zip, e.g. Overleaf's *Download Source*."),
             ("🧹", "Clean", "Comments, todos and unused files are removed."),
@@ -25,14 +25,26 @@ MODES = {
     "acl": {
         "logo": ASSETS / "acl.svg",
         "name": "Check ACL format",
-        "summary": "Catch margin, font, page-limit and reference problems in your camera-ready.",
-        "upload": "Your camera-ready PDF",
+        "summary": "Check margins, fonts, page limit and references.",
+        "upload": "Camera-ready PDF",
         "steps": [
             ("📄", "Upload", "The camera-ready PDF of your paper."),
             ("📏", "Check", "Page size, margins, page limit, fonts and references."),
             ("✅", "Fix", "Every problem by page, marked in red."),
         ],
         "view": acl_view,
+    },
+    "camera": {
+        "logo": ASSETS / "icon.svg",
+        "name": "ACL camera-ready",
+        "summary": "Check the PDF and clean the source, and match the two.",
+        "upload": "Zip + PDF",
+        "steps": [
+            ("📦", "Upload", "Your project .zip and its camera-ready PDF."),
+            ("🔎", "Check", "ACL format, arXiv cleaning, and whether the two match."),
+            ("🎓", "Submit", "The PDF to the proceedings, the zip to arXiv."),
+        ],
+        "view": camera_ready_view,
     },
 }
 
@@ -51,13 +63,11 @@ with title_col:
 
 # --- Mode cards -----------------------------------------------------------------
 
-for column, (key, info) in zip(st.columns(2), MODES.items(), strict=True):
+for column, (key, info) in zip(st.columns(len(MODES)), MODES.items(), strict=True):
     selected = key == mode
     with column.container(border=True):
-        logo_cell, name_cell = st.columns([1, 3], vertical_alignment="center")
-        logo_cell.image(str(info["logo"]), width=64)
-        name_cell.markdown(f"#### {info['name']}")
-        st.markdown(info["summary"])
+        st.image(str(info["logo"]), width=56)
+        st.markdown(f"##### {info['name']}\n{info['summary']}")
         st.caption(f"You upload: {info['upload']}")
         if (
             st.button(

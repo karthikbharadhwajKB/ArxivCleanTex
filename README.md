@@ -2,7 +2,7 @@
 
 # PaperReady
 
-A web app that gets your paper ready to submit. It has two modes, picked at
+A web app that gets your paper ready to submit. It has three modes, picked at
 the top of the page:
 
 - **🧹 Prepare for arXiv:** upload your LaTeX project as a `.zip` and get back
@@ -10,6 +10,8 @@ the top of the page:
 - **📏 Check ACL format:** upload the camera-ready PDF of an ACL-style paper and
   check it with [aclpubcheck](https://github.com/acl-org/aclpubcheck), the tool
   ACL publication chairs use (see [Check ACL format](#check-acl-format)).
+- **🎓 ACL camera-ready:** upload both, get both results, and check that the
+  PDF and the source match (see [ACL camera-ready](#acl-camera-ready)).
 
 For arXiv, the cleaning itself is done by Google's
 [`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner).
@@ -139,6 +141,21 @@ up as hundreds of margin errors. The app says so instead of listing them all.
 - **Author names online:** off by default, because it sends your references to
   the Scholarcy API and is slow.
 
+## ACL camera-ready
+
+For the week you submit the camera-ready to the proceedings and a preprint to
+arXiv. Upload the project `.zip` and its camera-ready PDF together to get:
+
+- **The ACL format check** of the PDF and **the arXiv-ready zip** of the source,
+  in two tabs with everything the single modes show.
+- **Cross-checks that need both files:**
+  - **Same version:** flags a final PDF uploaded next to a source that is still
+    the anonymous review version (or the other way round).
+  - **Same paper:** the `\title` in the source must appear on the PDF's first
+    page, which catches uploading the wrong PDF.
+- **One verdict** covering all of it: "🎓 Camera-ready and arXiv-ready!", or a
+  list of what to fix.
+
 ## Which files arXiv needs
 
 arXiv compiles from the folder that holds the main `.tex`. Here is what
@@ -189,6 +206,8 @@ uv run ruff check . && uv run ruff format --check .   # lint and format
   - every cleaner option and `.bbl` generation
   - review-version detection
   - byte-for-byte parity with `arxiv_latex_cleaner`
+- **`tests/test_camera_ready.py`:** title extraction and the source-vs-PDF
+  cross-checks.
 - **`tests/test_acl.py`:** the ACL check:
   - grouping and review-version detection
   - error handling
@@ -242,20 +261,22 @@ dashboard.
 ## Project layout
 
 ```
-streamlit_app.py            the page: header, mode switch
-views/arxiv_view.py         “Prepare for arXiv”: options, cleaning, results
-views/acl_view.py           “Check ACL format”: options, check, report
-paperready/core.py       shared upload handling (safe unzip, OS-junk removal)
-paperready/arxiv.py      the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
-paperready/acl.py        the ACL check (runs aclpubcheck, groups results, page images)
-paperready/acl_runner.py runs aclpubcheck in a separate process
-.streamlit/config.toml      the app's theme
-assets/                     icons: PaperReady (icon.svg + PNGs), arXiv mode (arxiv.svg), ACL mode (acl.svg)
-requirements.txt            Python dependencies for Streamlit Community Cloud
-packages.txt                system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
-pyproject.toml              dependencies for local development with uv
-tests/                      pytest suite (uv run pytest)
-.github/workflows/ci.yml    CI: lint and tests on every push and pull request
+streamlit_app.py             the page: header, mode cards, footer
+views/arxiv_view.py          “Prepare for arXiv”: options, cleaning, results
+views/acl_view.py            “Check ACL format”: options, check, report
+views/camera_ready_view.py   “ACL camera-ready”: both uploads, cross-checks, one verdict
+paperready/core.py           shared upload handling (safe unzip, OS-junk removal)
+paperready/arxiv.py          the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
+paperready/acl.py            the ACL check (runs aclpubcheck, groups results, page images)
+paperready/acl_runner.py     runs aclpubcheck in a separate process
+paperready/camera_ready.py   checks between the source and the PDF (same version, same paper)
+.streamlit/config.toml       the app's theme
+assets/                      icons: PaperReady (icon.svg + PNGs), arXiv (arxiv.svg), ACL (acl.svg)
+requirements.txt             Python dependencies for Streamlit Community Cloud
+packages.txt                 system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
+pyproject.toml               dependencies for local development with uv
+tests/                       pytest suite (uv run pytest)
+.github/workflows/ci.yml     CI: lint and tests on every push and pull request
 ```
 
 ## Author

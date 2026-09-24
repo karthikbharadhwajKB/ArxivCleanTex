@@ -20,9 +20,8 @@ def report_markdown(report, file_name, paper_type):
     return "\n".join(lines) + "\n"
 
 
-def render():
-    uploaded = st.file_uploader("Upload your paper (PDF)", type=["pdf"])
-
+def check_options():
+    """Paper type and the “Check options” expander. Returns (paper_type, options dict)."""
     paper_type = (
         st.segmented_control(
             "Paper type",
@@ -34,7 +33,6 @@ def render():
         )
         or "long"
     )
-
     with st.expander("⚙️ Check options"):
         check_bottom = st.checkbox(
             "Check that the bottom margin is empty",
@@ -52,23 +50,25 @@ def render():
             help="Sends the PDF's references to the Scholarcy API and compares author "
             "names with ACL Anthology, DBLP and arXiv to catch outdated names.",
         )
+    return paper_type, {
+        "check_bottom": check_bottom,
+        "check_references": check_references,
+        "check_names": check_names,
+    }
 
-    if uploaded is None:
-        st.info(
-            "👆 Upload the **camera-ready** PDF of an ACL-style paper. Review versions "
-            "(with line numbers) trigger many false margin errors."
-        )
-        st.stop()
 
-    if not st.button("Check my paper", type="primary", icon="📏", width="stretch"):
-        st.stop()
-
+def check(pdf_bytes, paper_type, options):
+    """Runs aclpubcheck with a live status; shows errors and stops on failure."""
     started = time.monotonic()
     try:
         with st.status("Checking your paper…", expanded=True) as status:
             st.write("📏 Running aclpubcheck: page size, margins, page limit, fonts…")
             report = acl.check_pdf(
-                uploaded.getvalue(), paper_type, check_bottom, check_references, check_names
+                pdf_bytes,
+                paper_type,
+                options["check_bottom"],
+                options["check_references"],
+                options["check_names"],
             )
             status.update(
                 label=f"Checked in {time.monotonic() - started:.1f} s",
@@ -84,7 +84,11 @@ def render():
     except Exception as error:
         st.error(f"Something went wrong while checking: {error}")
         st.stop()
+    return report
 
+
+def show_report(report, upload_name, paper_type):
+    """Verdict, metrics, grouped issues, flagged pages and the report download."""
     if report.likely_review_version:
         st.warning(
             "This looks like a **review version**: it has an anonymous author line or "
@@ -130,9 +134,26 @@ def render():
 
     st.download_button(
         "Download report (.md)",
-        data=report_markdown(report, uploaded.name, paper_type),
-        file_name=uploaded.name.rsplit(".", 1)[0] + "_aclpubcheck.md",
+        data=report_markdown(report, upload_name, paper_type),
+        file_name=upload_name.rsplit(".", 1)[0] + "_aclpubcheck.md",
         mime="text/markdown",
         icon="⬇️",
         width="stretch",
     )
+
+
+def render():
+    uploaded = st.file_uploader("Upload your paper (PDF)", type=["pdf"])
+    paper_type, options = check_options()
+
+    if uploaded is None:
+        st.info(
+            "👆 Upload the **camera-ready** PDF of an ACL-style paper. Review versions "
+            "(with line numbers) trigger many false margin errors."
+        )
+        st.stop()
+    if not st.button("Check my paper", type="primary", icon="📏", width="stretch"):
+        st.stop()
+
+    report = check(uploaded.getvalue(), paper_type, options)
+    show_report(report, uploaded.name, paper_type)

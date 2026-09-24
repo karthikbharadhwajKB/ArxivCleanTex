@@ -108,7 +108,7 @@ def test_home_page_and_mode_switch(page, app_url):
     open_mode(page, app_url, "arxiv")
     page.wait_for_selector("text=Upload your LaTeX project (.zip)")
     assert page.title() == "PaperReady"
-    page.get_by_role("button", name="Choose", exact=True).click()
+    page.locator(".st-key-mode_acl button").click()
     page.wait_for_selector("text=Upload your paper (PDF)")
     assert page.url.endswith("?mode=acl")
     assert page.get_by_text("Nothing is stored").is_visible()
@@ -178,3 +178,27 @@ def test_acl_check_end_to_end(page, app_url, tmp_path):
     assert page.get_by_text("formatting errors").first.is_visible()
     assert page.get_by_text("Page limit").first.is_visible()
     assert page.get_by_text("Fonts").first.is_visible()
+
+
+@pytest.mark.skipif(not shutil.which("pdflatex"), reason="pdflatex not installed")
+def test_camera_ready_end_to_end(page, app_url, tmp_path):
+    source = "\\documentclass{article}\\title{Great Results}\\begin{document}\\maketitle Hello\\end{document}"
+    tex = tmp_path / "paper.tex"
+    tex.write_text(source)
+    subprocess.run(["pdflatex", "-interaction=nonstopmode", tex.name], cwd=tmp_path, capture_output=True)
+    project = tmp_path / "paper.zip"
+    project.write_bytes(make_zip({"main.tex": source.replace("Hello", "Hello % private")}))
+
+    open_mode(page, app_url, "camera")
+    inputs = page.locator("input[type=file]")
+    inputs.nth(0).set_input_files(str(project))
+    inputs.nth(1).set_input_files(str(tmp_path / "paper.pdf"))
+    page.get_by_role("button", name="Check and clean my paper").click()
+    page.wait_for_selector("text=Download report (.md)", timeout=180_000)
+    assert page.get_by_text("Source and PDF are both the final version").is_visible()
+    assert page.get_by_text("Source and PDF are the same paper").is_visible()
+
+    page.get_by_role("tab", name="🧹 arXiv (source)").click()
+    with page.expect_download() as download:
+        page.get_by_role("button", name="Download cleaned .zip").click()
+    assert b"private" not in zipfile.ZipFile(download.value.path()).read("main.tex")
