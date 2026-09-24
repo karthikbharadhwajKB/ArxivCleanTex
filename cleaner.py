@@ -1,5 +1,6 @@
 import codecs
 import io
+import json
 import re
 import shutil
 import subprocess
@@ -9,6 +10,8 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+
+import yaml
 
 DEFAULT_MAIN = "main.tex"
 
@@ -84,6 +87,10 @@ class MainFileNotFoundError(CleanerError):
 
 
 class AmbiguousMainFileError(CleanerError):
+    pass
+
+
+class InvalidOptionsError(CleanerError):
     pass
 
 
@@ -395,6 +402,163 @@ def _split_args(raw):
     return [a.strip() for a in raw.split(",") if a.strip()]
 
 
+@dataclass
+class CleanerOptions:
+    """Every arxiv_latex_cleaner option the app exposes, with upstream defaults.
+
+    Name lists are free text ("todo, \\note"); see build_cleaner_args.
+    """
+
+    keep_bib: bool = False
+    resize_images: bool = False
+    im_size: int = 500
+    compress_pdf: bool = False
+    pdf_im_resolution: int = 500
+    images_allowlist: str = ""
+    convert_png_to_jpg: bool = False
+    png_quality: int = 50
+    png_size_threshold: float = 0.5
+    commands_to_delete: str = ""
+    commands_only_to_delete: str = ""
+    environments_to_delete: str = ""
+    if_exceptions: str = ""
+    use_external_tikz: str = ""
+    svg_inkscape: bool = False
+    svg_inkscape_path: str = ""
+
+
+# Options whose values upstream's --config merge would overwrite with argparse
+# defaults, so values from an uploaded config are passed as flags instead.
+_SCALAR_OPTIONS = {
+    "keep_bib": bool,
+    "resize_images": bool,
+    "im_size": int,
+    "compress_pdf": bool,
+    "pdf_im_resolution": int,
+    "convert_png_to_jpg": bool,
+    "png_quality": int,
+    "png_size_threshold": float,
+    "use_external_tikz": str,
+    "svg_inkscape": str,
+}
+
+
+def _relative_folder(raw, label):
+    folder = raw.strip().replace("\\", "/").strip("/")
+    if not folder:
+        return ""
+    if ".." in PurePosixPath(folder).parts:
+        raise InvalidOptionsError(f"{label} must be a folder inside your project.")
+    return folder
+
+
+def build_cleaner_args(options):
+    """Turns CleanerOptions into arxiv_latex_cleaner arguments.
+
+    Returns (args, notes): notes are user-facing messages about input that was
+    ignored. Raises InvalidOptionsError for input that cannot be used.
+    """
+    args, notes = [], []
+    if options.keep_bib:
+        args.append("--keep_bib")
+    if options.resize_images:
+        args += ["--resize_images", "--im_size", str(int(options.im_size))]
+    if options.compress_pdf:
+        args += ["--compress_pdf", "--pdf_im_resolution", str(int(options.pdf_im_resolution))]
+    if options.convert_png_to_jpg:
+        if not 0 <= options.png_quality <= 100:
+            raise InvalidOptionsError("PNG → JPG quality must be between 0 and 100.")
+        args += [
+            "--convert_png_to_jpg",
+            "--png_quality", str(int(options.png_quality)),
+            "--png_size_threshold", str(float(options.png_size_threshold)),
+        ]
+
+    if options.images_allowlist.strip():
+        try:
+            allowlist = json.loads(options.images_allowlist)
+        except json.JSONDecodeError as error:
+            raise InvalidOptionsError(f"Image allowlist is not valid JSON: {error}.")
+        if not isinstance(allowlist, dict) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in allowlist.values()
+        ):
+            raise InvalidOptionsError(
+                'Image allowlist must map image paths to numbers, e.g. {"figs/a.png": 2000}.'
+            )
+        args += ["--images_allowlist", json.dumps(allowlist)]
+
+    for flag, raw, label, example in (
+        ("--commands_to_delete", options.commands_to_delete, "commands to delete", "`todo` for \\todo{...}"),
+        ("--commands_only_to_delete", options.commands_only_to_delete, "commands to unwrap", "`hl` for \\hl{...}"),
+        ("--environments_to_delete", options.environments_to_delete, "environments to delete", "`note` for \\begin{note}"),
+    ):
+        names, rejected = parse_commands(raw)
+        if rejected:
+            notes.append(
+                f"Ignored invalid {label}: " + ", ".join(f"`{r}`" for r in rejected)
+                + f". Use letters only, e.g. {example}."
+            )
+        if names:
+            args += [flag, *names]
+
+    names, rejected = parse_commands(options.if_exceptions)
+    rejected += [n for n in names if not n.startswith("if")]
+    names = [n for n in names if n.startswith("if")]
+    if rejected:
+        notes.append(
+            "Ignored invalid \\if exceptions: " + ", ".join(f"`{r}`" for r in rejected)
+            + ". They must start with “if”, e.g. `ifdraft`."
+        )
+    if names:
+        args += ["--if_exceptions", *names]
+
+    tikz = _relative_folder(options.use_external_tikz, "External TikZ folder")
+    if tikz:
+        args += ["--use_external_tikz", tikz]
+    if options.svg_inkscape:
+        args.append("--svg_inkscape")
+        path = _relative_folder(options.svg_inkscape_path, "Inkscape SVG folder")
+        if path:
+            args.append(path)
+    return args, notes
+
+
+def _load_config(config_bytes):
+    try:
+        config = yaml.safe_load(config_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        raise InvalidOptionsError(f"The config file is not valid YAML: {error}")
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise InvalidOptionsError("The config file must be a YAML mapping of option names.")
+    patterns = config.get("patterns_and_insertions") or []
+    required = ("pattern", "insertion", "description")
+    if not isinstance(patterns, list) or not all(
+        isinstance(p, dict) and all(isinstance(p.get(k), str) for k in required)
+        for p in patterns
+    ):
+        raise InvalidOptionsError(
+            "Each entry in patterns_and_insertions needs “pattern”, “insertion” "
+            "and “description” (see arxiv_latex_cleaner's cleaner_config.yaml)."
+        )
+    return config
+
+
+def _config_scalar_args(config, args):
+    """Flags for scalar config values the UI did not set (see _SCALAR_OPTIONS)."""
+    extra = []
+    for key, kind in _SCALAR_OPTIONS.items():
+        value = config.get(key)
+        if value is None or f"--{key}" in args or value is False:
+            continue
+        if kind is bool or (key == "svg_inkscape" and value is True):
+            extra.append(f"--{key}")
+        else:
+            extra += [f"--{key}", str(value)]
+    return extra
+
+
 def parse_commands(raw):
     """Turns user input like "\\todo, note{}" into (["todo", "note"], rejected)."""
     valid, rejected = [], []
@@ -536,8 +700,18 @@ def find_dropped_files(original_root, cleaned_root, main_name):
     return sorted(dropped.items())
 
 
-def clean_zip(zip_bytes, extra_args=None, main_hint=None):
-    extra_args = extra_args or []
+def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
+    """Cleans an uploaded project. `extra_args` are arxiv_latex_cleaner flags
+    (see build_cleaner_args); `config_bytes` is an optional cleaner_config.yaml."""
+    extra_args = list(extra_args or [])
+    config = _load_config(config_bytes) if config_bytes else None
+    if config is not None:
+        extra_args += _config_scalar_args(config, extra_args)
+    if "--compress_pdf" in extra_args and not shutil.which("gs"):
+        raise InvalidOptionsError(
+            "“Compress PDF figures” needs Ghostscript, which is not installed on "
+            "this server. Untick it and try again."
+        )
 
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "src"
@@ -613,7 +787,21 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
         staged = Path(tmp) / STAGING_NAME
         shutil.move(str(root), str(staged))
 
+        for flag, label in (("--use_external_tikz", "External TikZ"), ("--svg_inkscape", "Inkscape SVG")):
+            if flag in extra_args:
+                i = extra_args.index(flag) + 1
+                folder = extra_args[i] if i < len(extra_args) and not extra_args[i].startswith("--") else "svg-inkscape"
+                if not (staged / folder).is_dir():
+                    warnings.append(
+                        f"{label} folder “{folder}” was not found next to "
+                        f"{main_tex.name}, so that option had no effect."
+                    )
+
         cmd = [sys.executable, "-m", "arxiv_latex_cleaner", str(staged), *extra_args]
+        if config is not None:
+            config_path = Path(tmp) / "cleaner_config.yaml"
+            config_path.write_bytes(config_bytes)
+            cmd += ["--config", str(config_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
