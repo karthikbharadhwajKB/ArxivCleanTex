@@ -613,6 +613,13 @@ class TestCleanZip:
         result = clean_zip(make_zip(files))
         assert "main.bbl" in unzip(result.zip_bytes) and result.warnings == []
 
+    def test_bib_paths_are_not_reported_missing(self):
+        # Overleaf projects often use root-relative bib paths, e.g. latex/ref.
+        files = {"latex/main.tex": doc("\\bibliography{latex/ref}"), "latex/ref.bib": "@a{}"}
+        result = clean_zip(make_zip(files))
+        assert result.missing_files == []
+        assert any("main.bbl" in w for w in result.warnings)
+
     def test_missing_files_reported(self):
         result = clean_zip(make_zip({"main.tex": doc("\\includegraphics{figs/gone}")}))
         assert result.missing_files == [("main.tex", "figs/gone")]
