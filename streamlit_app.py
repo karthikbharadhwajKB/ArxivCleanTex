@@ -51,6 +51,9 @@ if uploaded is not None and st.button("Clean my paper", type="primary"):
             result = clean_zip(uploaded.getvalue(), extra, main_hint)
     except CleanerError as error:
         st.error(str(error).replace("\n", "  \n"))
+        if getattr(error, "details", ""):
+            with st.expander("Technical details"):
+                st.code(error.details, language="text")
     except Exception as error:
         st.error(f"Something went wrong while cleaning: {error}")
     else:
