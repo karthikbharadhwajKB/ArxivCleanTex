@@ -1,6 +1,6 @@
 import streamlit as st
 
-from cleaner import CleanerError, clean_zip
+from cleaner import CleanerError, clean_zip, parse_commands
 
 st.set_page_config(page_title="ArxivCleanTex", page_icon="🧹")
 
@@ -34,7 +34,7 @@ with st.expander("Cleaning options"):
         disabled=not resize,
     )
     commands = st.text_input(
-        "Commands to delete (space-separated, e.g. todo note)", value=""
+        "Commands to delete (e.g. todo note, or \\todo \\note)", value=""
     )
 
 if uploaded is not None and st.button("Clean my paper", type="primary"):
@@ -43,8 +43,15 @@ if uploaded is not None and st.button("Clean my paper", type="primary"):
         extra.append("--keep_bib")
     if resize:
         extra += ["--resize_images", "--im_size", str(int(im_size))]
-    if commands.strip():
-        extra += ["--commands_to_delete", *commands.split()]
+    command_names, rejected = parse_commands(commands)
+    if rejected:
+        st.warning(
+            "Ignored invalid command names: "
+            + ", ".join(f"`{c}`" for c in rejected)
+            + ". Use letters only, e.g. `todo` for \\todo{...}."
+        )
+    if command_names:
+        extra += ["--commands_to_delete", *command_names]
 
     try:
         with st.spinner("Cleaning..."):

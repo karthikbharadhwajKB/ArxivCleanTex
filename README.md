@@ -23,6 +23,11 @@ commands like `\todo{}` — powered by
      know exactly what to add before uploading to arXiv.
 3. Download the cleaned `.zip` and upload it to arXiv.
 
+> **Bibliography:** arXiv does not run BibTeX/Biber, and `.bib` files are removed
+> unless you tick *Keep .bib files*. Include the compiled `main.bbl` (named like
+> your main file) in the zip. On Overleaf it is under **Logs and output files →
+> Other logs and files**. The app warns you when it is missing.
+
 ## Run it locally
 
 ```bash
