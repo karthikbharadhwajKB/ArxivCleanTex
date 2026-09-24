@@ -1,26 +1,24 @@
-<p align="center"><img src="assets/icon.svg" width="112" alt="ArxivCleanTex icon"></p>
+<p align="center"><img src="assets/icon.svg" width="112" alt="PaperReady icon"></p>
 
-# ArxivCleanTex
+# PaperReady
 
-A web app that gets your LaTeX paper ready for arXiv.
-**Upload your project as a `.zip` → get back a cleaned, submission-ready `.zip`.**
+A web app that gets your paper ready to submit. It has two modes, picked at
+the top of the page:
 
-The cleaning itself is done by Google's
-[`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner).
-It strips comments, `\iffalse` blocks and helper commands like `\todo{}`, and
-removes files your paper doesn't use. ArxivCleanTex handles everything around
-it: messy real-world zips, the missing bibliography, and checking that the
-result will actually build on arXiv.
-
-The app has two modes, picked at the top of the page:
-
-- **🧹 Prepare for arXiv:** upload your LaTeX project, get a cleaned zip back
-  (everything below).
+- **🧹 Prepare for arXiv:** upload your LaTeX project as a `.zip` and get back
+  a cleaned, submission-ready `.zip`.
 - **📏 Check ACL format:** upload the camera-ready PDF of an ACL-style paper and
   check it with [aclpubcheck](https://github.com/acl-org/aclpubcheck), the tool
   ACL publication chairs use (see [Check ACL format](#check-acl-format)).
 
-## Use it
+For arXiv, the cleaning itself is done by Google's
+[`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner).
+It strips comments, `\iffalse` blocks and helper commands like `\todo{}`, and
+removes files your paper doesn't use. PaperReady handles everything around it:
+messy real-world zips, the missing bibliography, and checking that the result
+will actually build on arXiv.
+
+## Prepare for arXiv
 
 1. Zip your LaTeX project. On Overleaf, **Menu → Download → Source** gives you
    exactly this zip.
@@ -220,10 +218,10 @@ dashboard.
 streamlit_app.py            the page: header, mode switch
 views/arxiv_view.py         “Prepare for arXiv”: options, cleaning, results
 views/acl_view.py           “Check ACL format”: options, check, report
-arxivcleantex/core.py       shared upload handling (safe unzip, OS-junk removal)
-arxivcleantex/arxiv.py      the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
-arxivcleantex/acl.py        the ACL check (runs aclpubcheck, groups results, page images)
-arxivcleantex/acl_runner.py runs aclpubcheck in a separate process
+paperready/core.py       shared upload handling (safe unzip, OS-junk removal)
+paperready/arxiv.py      the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
+paperready/acl.py        the ACL check (runs aclpubcheck, groups results, page images)
+paperready/acl_runner.py runs aclpubcheck in a separate process
 .streamlit/config.toml      the app's theme
 assets/                     the app icon (SVG, plus PNG renders)
 requirements.txt            Python dependencies for Streamlit Community Cloud

@@ -2,7 +2,7 @@ import pytest
 import streamlit
 from streamlit.testing.v1 import AppTest
 
-from arxivcleantex import arxiv as cleaner
+from paperready import arxiv as cleaner
 from helpers import doc, make_zip, unzip
 
 APP = "streamlit_app.py"
@@ -84,7 +84,7 @@ def widget(elements, label):
 def test_initial_page():
     at = run_app()
     assert not at.exception
-    assert at.title[0].value == "🧹 ArxivCleanTex"
+    assert at.title[0].value == "📄 PaperReady"
     assert [t.label for t in at.text_input] == TEXT_INPUTS
     assert [c.label for c in at.checkbox] == CHECKBOXES
     assert len(at.button) == 0  # no button until a zip is uploaded
@@ -312,8 +312,8 @@ def test_generated_bbl_is_announced(upload):
 
 # --- ACL mode ---------------------------------------------------------------------
 
-from arxivcleantex import acl  # noqa: E402
-from arxivcleantex.acl import AclReport, Issue  # noqa: E402
+from paperready import acl  # noqa: E402
+from paperready.acl import AclReport, Issue  # noqa: E402
 
 ACL_MODE = "📏 Check ACL format"
 

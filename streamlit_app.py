@@ -7,7 +7,7 @@ from views import acl_view, arxiv_view
 ASSETS = Path(__file__).parent / "assets"
 
 st.set_page_config(
-    page_title="ArxivCleanTex", page_icon=str(ASSETS / "icon-192.png"), layout="centered"
+    page_title="PaperReady", page_icon=str(ASSETS / "icon-192.png"), layout="centered"
 )
 st.logo(str(ASSETS / "icon.svg"), size="large")
 
@@ -40,7 +40,7 @@ MODES = {
     },
 }
 
-st.title("🧹 ArxivCleanTex")
+st.title("📄 PaperReady")
 mode = st.segmented_control(
     "What do you want to do?", list(MODES), default=ARXIV, label_visibility="collapsed"
 ) or ARXIV

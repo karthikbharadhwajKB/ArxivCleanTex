@@ -49,7 +49,7 @@ def _pua_errors(error):
     return chr(_PUA_BASE + error.object[error.start]), error.start + 1
 
 
-codecs.register_error("arxivcleantex_pua", _pua_errors)
+codecs.register_error("paperready_pua", _pua_errors)
 
 GRAPHICS_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".eps", ".ps", ".svg", ".tikz"]
 
@@ -141,7 +141,7 @@ def _normalize_encodings(base):
         try:
             data.decode("utf-8")
         except UnicodeDecodeError:
-            text = data.decode("utf-8", errors="arxivcleantex_pua")
+            text = data.decode("utf-8", errors="paperready_pua")
             path.write_bytes(text.encode("utf-8"))
             restore.append(path)
     return restore, converted
