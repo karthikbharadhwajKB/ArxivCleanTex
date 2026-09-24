@@ -2,7 +2,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from views import acl_view, arxiv_view, camera_ready_view
+from paperready import feedback
+from views import acl_view, arxiv_view, camera_ready_view, feedback_view
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -91,6 +92,7 @@ for column, (number, (icon, title, text)) in zip(st.columns(3), enumerate(curren
 # footer's place is reserved first and filled before the view runs.
 body, footer = st.container(), st.container()
 with footer:
+    feedback_view.render()
     st.divider()
     st.caption(
         "PaperReady runs Google's "
@@ -100,8 +102,9 @@ with footer:
         "right away."
     )
     st.markdown(
-        "Made by **Karthik Bharadhwaj** · "
-        "[github.com/karthikbharadhwajKB/PaperReady](https://github.com/karthikbharadhwajKB/PaperReady)"
+        f"Made by **[{feedback.AUTHOR}]({feedback.AUTHOR_URL})** · © 2026 · "
+        f"⭐ [Source on GitHub]({feedback.REPO_URL}) · "
+        f"[Report an issue]({feedback.REPO_URL}/issues)"
     )
 with body:
     current["view"].render()

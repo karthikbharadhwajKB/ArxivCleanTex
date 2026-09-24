@@ -230,6 +230,8 @@ def test_friendly_error(upload):
     at = click_clean(run_app())
     assert "No .tex files" in at.error[0].value
     assert not at.success
+    report = link_buttons(at)["Report this problem"]
+    assert "title=%5BBug%5D+No+.tex+files" in report and "error=No+.tex+files" in report
 
 
 def test_multiline_error_keeps_line_breaks(upload):
@@ -258,6 +260,7 @@ def test_unexpected_error(upload, monkeypatch):
     upload(make_zip({"main.tex": doc()}))
     at = click_clean(run_app())
     assert at.error[0].value == "Something went wrong while cleaning: disk full"
+    assert "error=Something+went+wrong+while+cleaning%3A+disk+full" in link_buttons(at)["Report this problem"]
 
 
 def test_warnings_and_missing_files(upload):
@@ -409,12 +412,29 @@ def test_unknown_mode_falls_back_to_arxiv():
     assert at.get("file_uploader")[0].label == "Upload your LaTeX project (.zip)"
 
 
+def link_buttons(at):
+    return {b.proto.label: b.proto.url for b in at.get("link_button")}
+
+
 def test_footer_is_always_shown():
     for at in (run_app(), run_acl_mode()):
         assert any("Nothing is stored" in c for c in at.caption.values)
         credit = next(m for m in at.markdown.values if "Made by" in m)
-        assert "**Karthik Bharadhwaj**" in credit
+        assert "**[Karthik Bharadhwaj](https://github.com/karthikbharadhwajKB)**" in credit
         assert "(https://github.com/karthikbharadhwajKB/PaperReady)" in credit
+        assert "(https://github.com/karthikbharadhwajKB/PaperReady/issues)" in credit
+
+
+@pytest.mark.parametrize("mode, name", [("arxiv", "Prepare+for+arXiv"), ("acl", "Check+ACL+format")])
+def test_help_section_links_to_issue_forms(mode, name):
+    at = run_app() if mode == "arxiv" else run_acl_mode()
+    assert any("Found a problem or missing a feature?" in m for m in at.markdown.values)
+    links = link_buttons(at)
+    assert (
+        "template=bug_report.yml" in links["Report a problem"] and f"mode={name}" in links["Report a problem"]
+    )
+    assert links["Suggest a feature"].endswith("template=feature_request.yml")
+    assert "Report this problem" not in links
 
 
 def test_acl_mode_defaults():
@@ -485,6 +505,8 @@ def test_acl_error(upload, monkeypatch):
     at = run_acl_mode()
     button(at, "Check my paper").click().run()
     assert "boom" in at.error[0].value and at.code[0].value == "Traceback"
+    report = link_buttons(at)["Report this problem"]
+    assert "mode=Check+ACL+format" in report and "Traceback" not in report
 
 
 def test_acl_report_download():
@@ -524,6 +546,7 @@ def test_acl_unexpected_error(upload, monkeypatch):
     at = run_acl_mode()
     button(at, "Check my paper").click().run()
     assert at.error[0].value == "Something went wrong while checking: disk full"
+    assert "error=Something+went+wrong+while+checking%3A+disk+full" in link_buttons(at)["Report this problem"]
 
 
 @pytest.mark.parametrize(

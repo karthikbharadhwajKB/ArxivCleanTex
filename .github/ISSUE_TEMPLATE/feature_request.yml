@@ -1,0 +1,18 @@
+name: Suggest a feature
+description: A new check, venue or option you'd like PaperReady to have.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like PaperReady to do?
+      placeholder: Support the NeurIPS checklist, check ICML page limits, …
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would it help you?
+    validations:
+      required: false

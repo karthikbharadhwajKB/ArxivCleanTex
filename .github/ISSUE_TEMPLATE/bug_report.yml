@@ -1,0 +1,57 @@
+name: Report a problem
+description: Something went wrong, or the result is not what you expected.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make PaperReady better! Please don't paste anything private
+        (unpublished results, reviewer comments, passwords).
+  - type: input
+    id: mode
+    attributes:
+      label: Mode
+      description: Prepare for arXiv, Check ACL format or ACL camera-ready.
+      placeholder: Prepare for arXiv
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+      placeholder: I uploaded my Overleaf zip and clicked “Clean my paper”, then …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: false
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message
+      description: Filled in for you when you use the “Report this problem” button in the app.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: example
+    attributes:
+      label: Example (optional)
+      description: |
+        A small .zip or PDF that shows the problem helps us fix it fast. Drag it here
+        only if you're happy for it to be public; a cut-down example (e.g. the main
+        .tex with the text removed) works too.
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Versions
+      description: Filled in for you by the app.
+    validations:
+      required: false

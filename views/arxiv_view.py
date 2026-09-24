@@ -6,6 +6,7 @@ import streamlit as st
 
 from paperready import arxiv
 from paperready.arxiv import ARXIV_SIZE_LIMIT, CleanerError, CleanerOptions
+from views import feedback_view
 
 
 def human_size(num_bytes):
@@ -160,9 +161,11 @@ def clean(zip_bytes, main_hint, options, make_bbl, config):
         if getattr(error, "details", ""):
             with st.expander("Technical details"):
                 st.code(error.details, language="text")
+        feedback_view.report_button(str(error))
         st.stop()
     except Exception as error:
         st.error(f"Something went wrong while cleaning: {error}")
+        feedback_view.report_button(f"Something went wrong while cleaning: {error}")
         st.stop()
     return result
 
