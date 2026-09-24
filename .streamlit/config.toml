@@ -1,13 +1,14 @@
 [theme]
 base = "light"
-primaryColor = "#B31B1B"
+primaryColor = "#4F46E5"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F6F3EE"
-textColor = "#1F2328"
-borderColor = "#E4DED4"
-baseRadius = "0.6rem"
+secondaryBackgroundColor = "#F5F5FC"
+textColor = "#1E1B4B"
+borderColor = "#E0E0F2"
+linkColor = "#4338CA"
+baseRadius = "0.75rem"
 font = "sans-serif"
-headingFont = "serif"
+headingFont = "sans-serif"
 codeFont = "monospace"
 showWidgetBorder = true
 

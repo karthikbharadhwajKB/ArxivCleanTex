@@ -113,8 +113,7 @@ def render():
 
     if uploaded is None:
         st.info(
-            "👆 Drop your project's .zip above to get started. Nothing is stored: "
-            "files are processed in a temporary folder and deleted right away."
+            "👆 Drop your project's .zip above to get started."
         )
         st.stop()
 

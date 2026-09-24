@@ -1,18 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PaperReady">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#C62828"/>
-      <stop offset="1" stop-color="#8E1414"/>
+    <linearGradient id="pr-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B5BF0"/>
+      <stop offset="1" stop-color="#312E81"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#pr-bg)"/>
   <!-- paper with folded corner -->
-  <path d="M136 92h168l76 76v244a16 16 0 0 1-16 16H136a16 16 0 0 1-16-16V108a16 16 0 0 1 16-16z" fill="#FFFFFF"/>
-  <path d="M304 92v60a16 16 0 0 0 16 16h60z" fill="#F3D9D9"/>
-  <!-- chi, as in arXiv -->
-  <path d="M176 214c34 0 52 18 70 58l42 92c14 30 26 42 50 42" fill="none" stroke="#1F2328" stroke-width="30" stroke-linecap="round"/>
-  <path d="M322 214c-40 30-92 124-142 192" fill="none" stroke="#1F2328" stroke-width="30" stroke-linecap="round"/>
-  <!-- clean sparkles -->
-  <path d="M404 250c6 34 18 46 52 52-34 6-46 18-52 52-6-34-18-46-52-52 34-6 46-18 52-52z" fill="#FFC53D"/>
-  <path d="M96 344c4 20 11 27 31 31-20 4-27 11-31 31-4-20-11-27-31-31 20-4 27-11 31-31z" fill="#FFC53D"/>
+  <path d="M140 84h160l84 84v252a20 20 0 0 1-20 20H140a20 20 0 0 1-20-20V104a20 20 0 0 1 20-20z" fill="#FFFFFF"/>
+  <path d="M300 84v64a20 20 0 0 0 20 20h64z" fill="#C7D2FE"/>
+  <!-- title and text lines -->
+  <rect x="168" y="196" width="152" height="24" rx="12" fill="#312E81"/>
+  <rect x="168" y="248" width="176" height="16" rx="8" fill="#C7D2FE"/>
+  <rect x="168" y="284" width="176" height="16" rx="8" fill="#C7D2FE"/>
+  <rect x="168" y="320" width="120" height="16" rx="8" fill="#C7D2FE"/>
+  <!-- ready badge -->
+  <circle cx="372" cy="376" r="84" fill="#312E81"/>
+  <circle cx="372" cy="376" r="70" fill="#22C55E"/>
+  <path d="M338 378l24 24 46-50" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

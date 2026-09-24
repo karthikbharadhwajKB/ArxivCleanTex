@@ -52,8 +52,16 @@ def run_app():
     return AppTest.from_file(APP, default_timeout=60).run()
 
 
+def button(at, label):
+    return next(b for b in at.button if b.label == label)
+
+
+def labels(elements):
+    return [e.label for e in elements]
+
+
 def click_clean(at):
-    at.button[0].click().run()
+    button(at, "Clean my paper").click().run()
     assert not at.exception
     return at
 
@@ -84,10 +92,10 @@ def widget(elements, label):
 def test_initial_page():
     at = run_app()
     assert not at.exception
-    assert at.title[0].value == "📄 PaperReady"
+    assert at.title[0].value == "PaperReady"
     assert [t.label for t in at.text_input] == TEXT_INPUTS
     assert [c.label for c in at.checkbox] == CHECKBOXES
-    assert len(at.button) == 0  # no button until a zip is uploaded
+    assert labels(at.button) == ["✓ Selected", "Choose"]  # only the mode cards until a zip is uploaded
     assert "Drop your project's .zip" in at.info[0].value
 
 
@@ -155,14 +163,14 @@ def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatc
     widget(at.text_input, TEXT_INPUTS[4]).input("ifdraft")
     widget(at.text_input, TEXT_INPUTS[5]).input("tikz")
     widget(at.text_input, TEXT_INPUTS[6]).input("svgs")
-    at.button[0].click().run()
+    button(at, "Clean my paper").click().run()
     assert "Ghostscript" in at.error[0].value
     assert spy_clean_zip[-1]["extra_args"][4:8] == [
         "--compress_pdf", "--pdf_im_resolution", "300", "--convert_png_to_jpg"
     ]
 
     widget(at.checkbox, "Compress PDF figures (Ghostscript)").uncheck()
-    at.button[0].click().run()
+    button(at, "Clean my paper").click().run()
     assert not at.exception
     assert spy_clean_zip[-1] == {
         "extra_args": [
@@ -189,7 +197,7 @@ def test_invalid_option_shows_error(upload, spy_clean_zip):
     upload(make_zip({"main.tex": doc()}))
     at = run_app()
     at.text_area[0].input("{not json")
-    at.button[0].click().run()
+    button(at, "Clean my paper").click().run()
     assert "not valid JSON" in at.error[0].value
     assert spy_clean_zip == []
 
@@ -315,12 +323,11 @@ def test_generated_bbl_is_announced(upload):
 from paperready import acl  # noqa: E402
 from paperready.acl import AclReport, Issue  # noqa: E402
 
-ACL_MODE = "📏 Check ACL format"
 
 
 def run_acl_mode():
     at = run_app()
-    at.button_group[0].set_value(ACL_MODE).run()
+    at.button(key="mode_acl").click().run()
     assert not at.exception
     return at
 
@@ -343,34 +350,57 @@ def fake_check(monkeypatch):
 
 def test_mode_switch():
     at = run_app()
-    assert at.button_group[0].value == "🧹 Prepare for arXiv"
+    assert at.query_params["mode"] == ["arxiv"]
     assert at.get("file_uploader")[0].label == "Upload your LaTeX project (.zip)"
-    at.button_group[0].set_value(ACL_MODE).run()
+    assert at.button(key="mode_arxiv").label == "✓ Selected"
+    at.button(key="mode_acl").click().run()
+    assert at.query_params["mode"] == ["acl"]
     assert at.get("file_uploader")[0].label == "Upload your paper (PDF)"
-    assert "Camera-ready check for ACL venues" in at.markdown.values[0]
+    assert at.button(key="mode_acl").label == "✓ Selected"
+    assert at.button(key="mode_arxiv").label == "Choose"
+
+
+def test_mode_from_url():
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.query_params["mode"] = "acl"
+    at.run()
+    assert at.get("file_uploader")[0].label == "Upload your paper (PDF)"
+
+
+def test_unknown_mode_falls_back_to_arxiv():
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.query_params["mode"] = "nope"
+    at.run()
+    assert at.query_params["mode"] == ["arxiv"]
+    assert at.get("file_uploader")[0].label == "Upload your LaTeX project (.zip)"
+
+
+def test_footer_is_always_shown():
+    for at in (run_app(), run_acl_mode()):
+        assert any("Nothing is stored" in c for c in at.caption.values)
 
 
 def test_acl_mode_defaults():
     at = run_acl_mode()
-    assert at.button_group[1].label == "Paper type" and at.button_group[1].value == "long"
+    assert at.button_group[0].label == "Paper type" and at.button_group[0].value == "long"
     assert [(c.label, c.value) for c in at.checkbox] == [
         ("Check that the bottom margin is empty", True),
         ("Check reference links (DOIs, arXiv links)", True),
         ("Check author names online (slow)", False),
     ]
     assert "camera-ready" in at.info[0].value
-    assert len(at.button) == 0
+    assert "Check my paper" not in labels(at.button)
 
 
 def test_acl_options_are_passed(upload, fake_check):
     calls = fake_check(AclReport())
     upload(b"%PDF-1.5 paper", name="paper.pdf")
     at = run_acl_mode()
-    at.button_group[1].set_value("short")
+    at.button_group[0].set_value("short")
     at.checkbox[0].uncheck()
     at.checkbox[2].check()
     at.run()
-    at.button[0].click().run()
+    button(at, "Check my paper").click().run()
     assert calls == [(b"%PDF-1.5 paper", "short", False, True, True)]
     assert at.success[0].value == "All clear! No formatting errors found."
     assert [m.value for m in at.metric] == ["0", "0", "0"]
@@ -389,7 +419,7 @@ def test_acl_report_rendering(upload, fake_check):
     )
     upload(b"%PDF-1.5", name="paper.pdf")
     at = run_acl_mode()
-    at.button[0].click().run()
+    button(at, "Check my paper").click().run()
     assert not at.exception
     assert "Found 4 formatting errors in 2 places" in at.error[0].value
     assert [m.value for m in at.metric] == ["4", "1", "1"]
@@ -405,7 +435,7 @@ def test_acl_review_version_warning(upload, fake_check):
     fake_check(AclReport(errors=[Issue("Margins", "x", 900)], likely_review_version=True))
     upload(b"%PDF-1.5", name="paper.pdf")
     at = run_acl_mode()
-    at.button[0].click().run()
+    button(at, "Check my paper").click().run()
     assert "review version" in at.warning[0].value
 
 
@@ -416,7 +446,7 @@ def test_acl_error(upload, monkeypatch):
     monkeypatch.setattr(acl, "check_pdf", fail)
     upload(b"%PDF-1.5", name="paper.pdf")
     at = run_acl_mode()
-    at.button[0].click().run()
+    button(at, "Check my paper").click().run()
     assert "boom" in at.error[0].value and at.code[0].value == "Traceback"
 
 
