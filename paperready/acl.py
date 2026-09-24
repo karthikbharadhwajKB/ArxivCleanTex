@@ -44,6 +44,9 @@ _REVIEW_MIN_ERRORS = 100
 _REVIEW_MIN_REPEATS = 8
 
 _PAGE = re.compile(r"page (\d+)")
+# aclpubcheck's crash on PDFs without text (e.g. scans), as worded by Python 3.10
+# ("max() arg is an empty sequence") and 3.12+ ("max() iterable argument is empty").
+_NO_TEXT = re.compile(r"max\(\) (?:arg is an empty sequence|iterable argument is empty)")
 # The author line of anonymous ACL-style submissions, e.g. "Anonymous ACL submission".
 # PDF text extraction often drops the spaces ("AnonymousACLsubmission").
 _ANONYMOUS = re.compile(r"\bAnonymous\s*(?:[A-Z0-9][A-Za-z0-9-]*\s*){0,3}submission\b")
@@ -151,7 +154,7 @@ def check_pdf(
         if run.returncode != 0 or not log_file.is_file():
             details = (run.stderr or run.stdout or "").strip()
             last = details.splitlines()[-1] if details else "unknown error"
-            if "max() arg is an empty sequence" in last:
+            if _NO_TEXT.search(last):
                 raise AclCheckFailedError(
                     "No text could be read from this PDF. Is it scanned or made of "
                     "images? Upload the PDF produced by LaTeX.",
