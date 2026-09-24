@@ -107,6 +107,20 @@ class CleanResult:
     project_root: str
     missing_files: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # {relative path: size in bytes} of the paper folder before and after cleaning.
+    input_files: dict = field(default_factory=dict)
+    output_files: dict = field(default_factory=dict)
+    # References the cleaner left out although they were uploaded.
+    dropped_files: list = field(default_factory=list)
+    missing_bbl: bool = False
+
+
+def _file_sizes(base):
+    return {
+        p.relative_to(base).as_posix(): p.stat().st_size
+        for p in sorted(base.rglob("*"))
+        if p.is_file()
+    }
 
 
 def _is_ignored(path, base):
@@ -776,7 +790,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
         # .bbl (warned about below), so a .bib path cannot break the build.
         missing, uses_bib = find_missing_files(root, main_tex, check_bib=False)
         bbl = main_tex.with_suffix(".bbl")
-        if uses_bib and not bbl.is_file():
+        missing_bbl = uses_bib and not bbl.is_file()
+        if missing_bbl:
             warnings.append(
                 f"Your paper uses a .bib bibliography but “{bbl.name}” is not in "
                 "the zip. arXiv does not run BibTeX/Biber, so references will "
@@ -790,6 +805,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
         restore_rel = [p.relative_to(root) for p in restore if root in p.parents]
         staged = Path(tmp) / STAGING_NAME
         shutil.move(str(root), str(staged))
+        input_files = _file_sizes(staged)
 
         for flag, label in (("--use_external_tikz", "External TikZ"), ("--svg_inkscape", "Inkscape SVG")):
             if flag in extra_args:
@@ -829,7 +845,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
 
         # Re-check the cleaned sources: anything they still reference that was
         # uploaded but is absent from the output was dropped by the cleaner.
-        for ref, reason in find_dropped_files(staged, cleaned, main_tex.name)[:10]:
+        dropped = find_dropped_files(staged, cleaned, main_tex.name)
+        for ref, reason in dropped[:10]:
             warnings.append(
                 f"arxiv_latex_cleaner left out “{ref}”, which your paper still "
                 f"uses: {reason}."
@@ -853,4 +870,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
             project_root=root_rel,
             missing_files=missing,
             warnings=warnings,
+            input_files=input_files,
+            output_files=_file_sizes(cleaned),
+            dropped_files=[ref for ref, _ in dropped],
+            missing_bbl=missing_bbl,
         )
