@@ -702,3 +702,53 @@ class TestCleanZip:
         monkeypatch.setattr(cleaner.subprocess, "run", fake_run)
         with pytest.raises(CleaningFailedError, match="did not keep main.tex"):
             clean_zip(make_zip({"main.tex": doc()}))
+
+
+# --- Output fidelity ------------------------------------------------------------
+
+
+UPSTREAM_PROJECT = {
+    "main.tex": doc(
+        "Hi % secret\n\\input{sections/intro}\\includegraphics{figs/plot}"
+        "\\todo{draft}\\iffalse hidden\\fi\\begin{comment}x\\end{comment}"
+        "\\bibliography{refs}",
+        "\\usepackage{rootstyle}",
+    ),
+    "sections/intro.tex": "Intro % secret",
+    "sections/unused.tex": "Unused",
+    "notes.tex": "Root file % secret",
+    "figs/plot.png": "png",
+    "figs/unused.png": "png",
+    "rootstyle.sty": "sty",
+    "main.bbl": "bbl",
+    "refs.bib": "bib",
+    "main.aux": "aux",
+    "main.log": "log",
+}
+
+
+@pytest.mark.parametrize(
+    "extra_args", [[], ["--keep_bib"], ["--commands_to_delete", "todo"]]
+)
+def test_output_is_exactly_what_arxiv_latex_cleaner_produces(tmp_path, extra_args):
+    """The app only prepares the input; the cleaned files must be byte-for-byte
+    what running arxiv_latex_cleaner on the same folder produces."""
+    project = tmp_path / "project"
+    for name, data in UPSTREAM_PROJECT.items():
+        (project / name).parent.mkdir(parents=True, exist_ok=True)
+        (project / name).write_text(data)
+    cleaner.subprocess.run(
+        [cleaner.sys.executable, "-m", "arxiv_latex_cleaner", str(project), *extra_args],
+        check=True,
+        capture_output=True,
+    )
+    upstream_out = tmp_path / "project_arXiv"
+    expected = {
+        p.relative_to(upstream_out).as_posix(): p.read_bytes()
+        for p in upstream_out.rglob("*")
+        if p.is_file()
+    }
+
+    for layout in ("", "nested/folder/"):
+        files = {layout + name: data for name, data in UPSTREAM_PROJECT.items()}
+        assert unzip(clean_zip(make_zip(files), extra_args).zip_bytes) == expected
