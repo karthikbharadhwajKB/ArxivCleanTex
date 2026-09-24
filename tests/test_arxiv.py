@@ -1135,3 +1135,68 @@ def test_bbl_generation_without_bibtex(monkeypatch):
     files = {"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
     result = clean_zip(make_zip(files))
     assert result.missing_bbl and any("BibTeX is not installed" in w for w in result.warnings)
+
+
+# --- Review-version detection ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, review",
+    [
+        ("\\usepackage[review]{acl}", True),
+        ("\\usepackage[preprint]{acl}", False),
+        ("\\usepackage[final]{acl}", False),
+        ("\\usepackage{acl}", False),
+        ("\\usepackage{times,acl2021}", True),
+        ("\\usepackage{acl2021}\\aclfinalcopy", False),
+        ("\\usepackage{naacl2019}", True),
+        ("\\usepackage{neurips_2024}", True),
+        ("\\usepackage[preprint]{neurips_2024}", False),
+        ("\\usepackage[final,nonatbib]{neurips_2024}", False),
+        ("\\usepackage{icml2024}", True),
+        ("\\usepackage[accepted]{icml2024}", False),
+        ("\\usepackage{iclr2025_conference,times}", True),
+        ("\\usepackage{iclr2025_conference,times}\\iclrfinalcopy", False),
+        ("\\usepackage[review]{cvpr}", True),
+        ("\\usepackage[final]{cvpr}", False),
+        ("\\usepackage{lineno}\\linenumbers", True),
+        ("\\usepackage{graphicx,aclweb,amsmath}", False),
+    ],
+)
+def test_detect_review_version(text, review):
+    assert bool(cleaner.detect_review_version(text)) == review
+
+
+def test_review_messages_name_the_fix():
+    assert "\\usepackage[preprint]{acl}" in cleaner.detect_review_version("\\usepackage[review]{acl}")
+    assert "[accepted]{icml2024}" in cleaner.detect_review_version("\\usepackage{icml2024}")
+    assert "\\iclrfinalcopy" in cleaner.detect_review_version("\\usepackage{iclr2024_conference}")
+
+
+class TestReviewVersionInCleanZip:
+    def test_review_version_is_reported(self):
+        files = {"main.tex": doc("Hi", "\\usepackage[review]{acl}"), "acl.sty": "%"}
+        result = clean_zip(make_zip(files))
+        assert "review option" in result.review_version
+        assert any("submission version, not a final one" in w for w in result.warnings)
+
+    def test_final_version_is_fine(self):
+        files = {"main.tex": doc("Hi", "\\usepackage[final]{acl}"), "acl.sty": "%"}
+        result = clean_zip(make_zip(files))
+        assert result.review_version == "" and result.warnings == []
+
+    def test_commented_out_switches_do_not_count(self):
+        # The check runs on the cleaned sources, where comments are gone.
+        files = {
+            "main.tex": doc("Hi\n% \\linenumbers", "% \\usepackage[review]{acl}\n\\usepackage[final]{acl}"),
+            "acl.sty": "%",
+        }
+        assert clean_zip(make_zip(files)).review_version == ""
+
+    def test_commented_out_final_copy_is_a_review_version(self):
+        files = {"main.tex": doc("Hi", "\\usepackage{acl2021}\n% \\aclfinalcopy"), "acl2021.sty": "%"}
+        assert "aclfinalcopy" in clean_zip(make_zip(files)).review_version
+
+    def test_found_in_input_files(self):
+        files = {"main.tex": doc("\\input{preamble}"), "preamble.tex": "\\linenumbers"}
+        assert "line numbers" in clean_zip(make_zip(files)).review_version

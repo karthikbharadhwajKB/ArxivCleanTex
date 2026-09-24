@@ -296,6 +296,7 @@ def test_results_dashboard_lists_problems(upload):
     assert "⚠️ Nothing your paper uses was dropped" in checklist
     assert "⚠️ Bibliography compiled" in checklist
     assert "✅ Under arXiv's 50 MB limit" in checklist
+    assert "✅ Final version, not the anonymous submission" in checklist
     assert any("Almost there" in m for m in at.markdown.values)
 
 
@@ -468,3 +469,11 @@ def _png():
     buffer = io.BytesIO()
     Image.new("RGB", (20, 20), "red").save(buffer, "PNG")
     return buffer.getvalue()
+
+
+def test_review_version_in_checklist(upload):
+    upload(make_zip({"main.tex": doc("Hi", "\\usepackage[review]{acl}"), "acl.sty": "%"}))
+    at = click_clean(run_app())
+    checklist = next(m for m in at.markdown.values if "Final version" in m)
+    assert "⚠️ Final version, not the anonymous submission" in checklist
+    assert any("submission version, not a final one" in w.value for w in at.warning)

@@ -44,6 +44,9 @@ _REVIEW_MIN_ERRORS = 100
 _REVIEW_MIN_REPEATS = 8
 
 _PAGE = re.compile(r"page (\d+)")
+# The author line of anonymous ACL-style submissions, e.g. "Anonymous ACL submission".
+# PDF text extraction often drops the spaces ("AnonymousACLsubmission").
+_ANONYMOUS = re.compile(r"\bAnonymous\s*(?:[A-Z0-9][A-Za-z0-9-]*\s*){0,3}submission\b")
 
 
 class InvalidPdfError(CleanerError):
@@ -112,6 +115,18 @@ def _looks_like_review_version(logs):
     )
 
 
+def _anonymous_first_page(pdf_path):
+    """True if page 1 has an anonymous-submission author line."""
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(pdf_path) as pdf:
+            text = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
+    except Exception:
+        return False
+    return bool(_ANONYMOUS.search(text))
+
+
 def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=True,
               check_names=False, timeout=300):
     """Runs aclpubcheck on a PDF and returns an AclReport."""
@@ -148,6 +163,7 @@ def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=
 
         logs = json.loads(log_file.read_text())
         errors, warnings = _group(logs)
+        anonymous = _anonymous_first_page(work / "paper.pdf")
         images = {
             int(p.stem.rsplit("-", 1)[1]): p.read_bytes()
             for p in work.glob("errors-paper-page-*.png")
@@ -156,5 +172,5 @@ def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=
         errors=errors,
         warnings=warnings,
         page_images=dict(sorted(images.items())),
-        likely_review_version=_looks_like_review_version(logs),
+        likely_review_version=anonymous or _looks_like_review_version(logs),
     )
