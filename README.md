@@ -1,4 +1,6 @@
-# 🧹 ArxivCleanTex
+<p align="center"><img src="assets/icon.svg" width="112" alt="ArxivCleanTex icon"></p>
+
+# ArxivCleanTex
 
 A web app that gets your LaTeX paper ready for arXiv.
 **Upload your project as a `.zip` → get back a cleaned, submission-ready `.zip`.**
@@ -180,6 +182,7 @@ dashboard.
 streamlit_app.py        the web UI (upload → options → clean → results)
 cleaner.py              the pipeline (unzip → prepare → arxiv_latex_cleaner → checks → .bbl → zip)
 .streamlit/config.toml  the app's theme
+assets/                 the app icon (SVG, plus PNG renders)
 requirements.txt        Python dependencies for Streamlit Community Cloud
 packages.txt            system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
 pyproject.toml          dependencies for local development with uv

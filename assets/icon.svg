@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ArxivCleanTex">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C62828"/>
+      <stop offset="1" stop-color="#8E1414"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- paper with folded corner -->
+  <path d="M136 92h168l76 76v244a16 16 0 0 1-16 16H136a16 16 0 0 1-16-16V108a16 16 0 0 1 16-16z" fill="#FFFFFF"/>
+  <path d="M304 92v60a16 16 0 0 0 16 16h60z" fill="#F3D9D9"/>
+  <!-- chi, as in arXiv -->
+  <path d="M176 214c34 0 52 18 70 58l42 92c14 30 26 42 50 42" fill="none" stroke="#1F2328" stroke-width="30" stroke-linecap="round"/>
+  <path d="M322 214c-40 30-92 124-142 192" fill="none" stroke="#1F2328" stroke-width="30" stroke-linecap="round"/>
+  <!-- clean sparkles -->
+  <path d="M404 250c6 34 18 46 52 52-34 6-46 18-52 52-6-34-18-46-52-52 34-6 46-18 52-52z" fill="#FFC53D"/>
+  <path d="M96 344c4 20 11 27 31 31-20 4-27 11-31 31-4-20-11-27-31-31 20-4 27-11 31-31z" fill="#FFC53D"/>
+</svg>

@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 import streamlit as st
 
@@ -10,7 +11,12 @@ from cleaner import (
     clean_zip,
 )
 
-st.set_page_config(page_title="ArxivCleanTex", page_icon="🧹", layout="centered")
+ASSETS = Path(__file__).parent / "assets"
+
+st.set_page_config(
+    page_title="ArxivCleanTex", page_icon=str(ASSETS / "icon-192.png"), layout="centered"
+)
+st.logo(str(ASSETS / "icon.svg"), size="large")
 
 
 def human_size(num_bytes):
