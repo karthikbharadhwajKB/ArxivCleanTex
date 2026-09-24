@@ -113,6 +113,12 @@ with st.expander("⚙️ Cleaning options"):
         )
 
     with other_tab:
+        make_bbl = st.checkbox(
+            "Generate a missing .bbl with BibTeX",
+            value=True,
+            help="arXiv needs the compiled bibliography (.bbl) and does not run BibTeX. "
+            "If your zip has none, BibTeX builds it from your .bib and .bst files.",
+        )
         keep_bib = st.checkbox("Keep .bib files")
         external_tikz = st.text_input(
             "Folder with externalized TikZ PDFs (optional)",
@@ -169,7 +175,7 @@ try:
             st.warning(note)
         config = config_file.getvalue() if config_file is not None else None
         st.write("🧹 Running arxiv_latex_cleaner…")
-        result = clean_zip(uploaded.getvalue(), extra, main_hint, config)
+        result = clean_zip(uploaded.getvalue(), extra, main_hint, config, make_bbl)
         st.write("🔎 Checking the result for arXiv…")
         status.update(
             label=f"Cleaned in {time.monotonic() - started:.1f} s",
@@ -189,6 +195,11 @@ except Exception as error:
 # --- Results --------------------------------------------------------------------
 
 st.success(f"Done! Main file: `{result.main_file}`")
+if result.generated_bbl:
+    st.info(
+        f"📚 Generated `{result.generated_bbl}` with BibTeX from your .bib and "
+        "bibliography style, so your references will appear on arXiv."
+    )
 
 size_in = sum(result.input_files.values())
 size_out = sum(result.output_files.values())
@@ -217,7 +228,11 @@ checks = [
     (True, f"Main file found: `{result.main_file}`"),
     (not result.missing_files, "Every referenced file is in the upload"),
     (not result.dropped_files, "Nothing your paper uses was dropped by the cleaner"),
-    (not result.missing_bbl, "Bibliography compiled (.bbl included, or no .bib used)"),
+    (
+        not result.missing_bbl,
+        "Bibliography compiled"
+        + (f" (`{result.generated_bbl}` generated)" if result.generated_bbl else ""),
+    ),
     (size_out <= ARXIV_SIZE_LIMIT, "Under arXiv's 50 MB limit"),
 ]
 ready = all(ok for ok, _ in checks)
