@@ -21,11 +21,13 @@ class FakeUpload:
 def upload(monkeypatch):
     """Makes st.file_uploader return the given zip (AppTest cannot upload files)."""
 
-    def set_upload(data, name="paper.zip", config=None):
+    def set_upload(data, name="paper.zip", config=None, pdf=None):
         def file_uploader(label, *args, **kwargs):
             if label.startswith("cleaner_config"):
                 return FakeUpload(config, "cleaner_config.yaml") if config else None
-            return FakeUpload(data, name)
+            if label == "Upload your camera-ready PDF":
+                return FakeUpload(pdf, "paper.pdf") if pdf else None
+            return FakeUpload(data, name) if data else None
 
         monkeypatch.setattr(streamlit, "file_uploader", file_uploader)
 
@@ -95,7 +97,11 @@ def test_initial_page():
     assert at.title[0].value == "PaperReady"
     assert [t.label for t in at.text_input] == TEXT_INPUTS
     assert [c.label for c in at.checkbox] == CHECKBOXES
-    assert labels(at.button) == ["✓ Selected", "Choose"]  # only the mode cards until a zip is uploaded
+    assert labels(at.button) == [
+        "✓ Selected",
+        "Choose",
+        "Choose",
+    ]  # only the mode cards until a zip is uploaded
     assert "Drop your project's .zip" in at.info[0].value
 
 
@@ -527,3 +533,71 @@ def test_human_size(size, text):
     from views.arxiv_view import human_size
 
     assert human_size(size) == text
+
+
+# --- ACL camera-ready mode ----------------------------------------------------------
+
+
+def run_camera_mode():
+    at = run_app()
+    at.button(key="mode_camera").click().run()
+    assert not at.exception
+    return at
+
+
+def camera_project(review=False):
+    option = "review" if review else "final"
+    return make_zip(
+        {
+            "main.tex": doc("\\title{Great Results}\\maketitle Hi", f"\\usepackage[{option}]{{acl}}"),
+            "acl.sty": "%",
+        }
+    )
+
+
+@pytest.fixture
+def first_page(monkeypatch):
+    def set_text(text):
+        monkeypatch.setattr(acl, "first_page_text", lambda pdf: text)
+
+    return set_text
+
+
+def test_camera_mode_asks_for_both_files(upload):
+    upload(make_zip({"main.tex": doc()}))  # zip only
+    at = run_camera_mode()
+    assert "its camera-ready PDF" in at.info[0].value
+    assert "your project's .zip" not in at.info[0].value
+    assert "Check and clean my paper" not in labels(at.button)
+
+
+def test_camera_mode_all_ready(upload, fake_check, first_page):
+    calls = fake_check(AclReport())
+    first_page("Great Results\nJane Doe")
+    upload(camera_project(), pdf=b"%PDF-1.5 paper")
+    at = run_camera_mode()
+    button(at, "Check and clean my paper").click().run()
+    assert not at.exception
+    assert calls[0][0] == b"%PDF-1.5 paper"
+    verdict = next(m for m in at.markdown.values if "Source and PDF" in m)
+    assert "✅ ACL format check passed" in verdict
+    assert "✅ Source is ready for arXiv" in verdict
+    assert "✅ Source and PDF are both the final version" in verdict
+    assert "✅ Source and PDF are the same paper" in verdict
+    assert any("Camera-ready and arXiv-ready!" in m for m in at.markdown.values)
+    assert [t.label for t in at.tabs][-4:-2] == ["📏 ACL format (PDF)", "🧹 arXiv (source)"]
+
+
+def test_camera_mode_mismatches(upload, fake_check, first_page):
+    fake_check(AclReport(errors=[Issue("Fonts", "Wrong font.")]))
+    first_page("A Completely Different Paper")
+    upload(camera_project(review=True), pdf=b"%PDF-1.5")
+    at = run_camera_mode()
+    button(at, "Check and clean my paper").click().run()
+    verdict = next(m for m in at.markdown.values if "ACL format:" in m)
+    assert "⚠️ ACL format: 1 errors to fix" in verdict
+    assert "⚠️ arXiv: 1 items to fix" in verdict
+    assert "⚠️ The source is still the review version" in verdict
+    assert "⚠️ The PDF may be a different paper" in verdict
+    assert any("Almost there" in m for m in at.markdown.values)
+    assert any("Great Results" in w.value for w in at.warning)

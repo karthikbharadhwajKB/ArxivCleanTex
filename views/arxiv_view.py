@@ -20,12 +20,8 @@ def file_table(files):
     return [{"File": name, "Size": human_size(size)} for name, size in files.items()]
 
 
-def render():
-    # --- Inputs ---------------------------------------------------------------------
-
-    uploaded = st.file_uploader("Upload your LaTeX project (.zip)", type=["zip"])
-
-    main_hint = st.text_input(
+def main_file_input():
+    return st.text_input(
         "Main .tex file or folder (optional)",
         value="",
         placeholder="main.tex",
@@ -36,6 +32,9 @@ def render():
         ),
     )
 
+
+def cleaning_options():
+    """The “Cleaning options” expander. Returns (CleanerOptions, make_bbl, config_bytes)."""
     with st.expander("⚙️ Cleaning options"):
         st.caption(
             "All options are passed to arxiv_latex_cleaner; defaults match its own. "
@@ -117,15 +116,6 @@ def render():
                 "Options set above take precedence.",
             )
 
-    if uploaded is None:
-        st.info("👆 Drop your project's .zip above to get started.")
-        st.stop()
-
-    # --- Cleaning -------------------------------------------------------------------
-
-    if not st.button("Clean my paper", type="primary", icon="🧹", width="stretch"):
-        st.stop()
-
     options = CleanerOptions(
         keep_bib=keep_bib,
         resize_images=resize,
@@ -144,7 +134,12 @@ def render():
         svg_inkscape=svg_inkscape,
         svg_inkscape_path=svg_path,
     )
+    config = config_file.getvalue() if config_file is not None else None
+    return options, make_bbl, config
 
+
+def clean(zip_bytes, main_hint, options, make_bbl, config):
+    """Runs the cleaner with a live status; shows errors and stops on failure."""
     started = time.monotonic()
     try:
         with st.status("Cleaning your paper…", expanded=True) as status:
@@ -152,9 +147,8 @@ def render():
             extra, notes = arxiv.build_cleaner_args(options)
             for note in notes:
                 st.warning(note)
-            config = config_file.getvalue() if config_file is not None else None
             st.write("🧹 Running arxiv_latex_cleaner…")
-            result = arxiv.clean_zip(uploaded.getvalue(), extra, main_hint, config, make_bbl)
+            result = arxiv.clean_zip(zip_bytes, extra, main_hint, config, make_bbl)
             st.write("🔎 Checking the result for arXiv…")
             status.update(
                 label=f"Cleaned in {time.monotonic() - started:.1f} s",
@@ -170,9 +164,27 @@ def render():
     except Exception as error:
         st.error(f"Something went wrong while cleaning: {error}")
         st.stop()
+    return result
 
-    # --- Results --------------------------------------------------------------------
 
+def readiness_checks(result):
+    """The arXiv readiness checklist as (ok, text) pairs."""
+    return [
+        (True, f"Main file found: `{result.main_file}`"),
+        (not result.missing_files, "Every referenced file is in the upload"),
+        (not result.dropped_files, "Nothing your paper uses was dropped by the cleaner"),
+        (
+            not result.missing_bbl,
+            "Bibliography compiled"
+            + (f" (`{result.generated_bbl}` generated)" if result.generated_bbl else ""),
+        ),
+        (not result.review_version, "Final version, not the anonymous submission"),
+        (sum(result.output_files.values()) <= ARXIV_SIZE_LIMIT, "Under arXiv's 50 MB limit"),
+    ]
+
+
+def show_results(result, upload_name, celebrate=True):
+    """Metrics, checklist, download, warnings and file lists for a CleanResult."""
     st.success(f"Done! Main file: `{result.main_file}`")
     if result.generated_bbl:
         st.info(
@@ -210,18 +222,7 @@ def render():
         border=True,
     )
 
-    checks = [
-        (True, f"Main file found: `{result.main_file}`"),
-        (not result.missing_files, "Every referenced file is in the upload"),
-        (not result.dropped_files, "Nothing your paper uses was dropped by the cleaner"),
-        (
-            not result.missing_bbl,
-            "Bibliography compiled"
-            + (f" (`{result.generated_bbl}` generated)" if result.generated_bbl else ""),
-        ),
-        (not result.review_version, "Final version, not the anonymous submission"),
-        (size_out <= ARXIV_SIZE_LIMIT, "Under arXiv's 50 MB limit"),
-    ]
+    checks = readiness_checks(result)
     ready = all(ok for ok, _ in checks)
     with st.container(border=True):
         st.markdown(
@@ -232,7 +233,7 @@ def render():
     st.download_button(
         "Download cleaned .zip",
         data=result.zip_bytes,
-        file_name=uploaded.name.rsplit(".", 1)[0] + "_cleaned.zip",
+        file_name=upload_name.rsplit(".", 1)[0] + "_cleaned.zip",
         mime="application/zip",
         type="primary",
         icon="⬇️",
@@ -256,5 +257,20 @@ def render():
         kept_tab.dataframe(file_table(result.output_files), hide_index=True, width="stretch")
         removed_tab.dataframe(file_table(removed), hide_index=True, width="stretch")
 
-    if ready:
+    if ready and celebrate:
         st.balloons()
+
+
+def render():
+    uploaded = st.file_uploader("Upload your LaTeX project (.zip)", type=["zip"])
+    main_hint = main_file_input()
+    options, make_bbl, config = cleaning_options()
+
+    if uploaded is None:
+        st.info("👆 Drop your project's .zip above to get started.")
+        st.stop()
+    if not st.button("Clean my paper", type="primary", icon="🧹", width="stretch"):
+        st.stop()
+
+    result = clean(uploaded.getvalue(), main_hint, options, make_bbl, config)
+    show_results(result, uploaded.name)

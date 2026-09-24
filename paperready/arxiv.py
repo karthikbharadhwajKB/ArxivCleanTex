@@ -107,6 +107,8 @@ class CleanResult:
     generated_bbl: str = ""
     # Why the paper looks like an anonymous/line-numbered submission, if it does.
     review_version: str = ""
+    # The paper's \\title, as plain text ("" if none was found).
+    title: str = ""
 
 
 def _encode_back(text):
@@ -640,6 +642,32 @@ def _package_options(text, package_pattern):
                 yield options, name
 
 
+def _braced(text, start):
+    """Returns the contents of the {...} group opening at text[start]."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{" and text[i - 1] != "\\":
+            depth += 1
+        elif text[i] == "}" and text[i - 1] != "\\":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1 : i]
+    return text[start + 1 :]
+
+
+def extract_title(text):
+    """The paper's \\title{...} as plain text, e.g. for comparing with a PDF."""
+    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", _strip_comments(text))
+    if not m:
+        return ""
+    title = _braced(_strip_comments(text), m.end() - 1)
+    title = re.sub(r"\\(?:thanks|footnote)\s*\{[^{}]*\}", "", title)  # footnotes aren't title text
+    title = re.sub(r"\\\\(?:\[[^\]]*\])?|~", " ", title)  # line breaks, ties
+    title = re.sub(r"\\[A-Za-z@]+\*?", " ", title)  # commands like \\textbf
+    title = re.sub(r"[{}$]", "", title)
+    return " ".join(title.split())
+
+
 def detect_review_version(text):
     """Returns why `text` (cleaned LaTeX) is an anonymous or line-numbered
     submission rather than a final version, with the fix, or "" if it is not."""
@@ -948,4 +976,5 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
             missing_bbl=missing_bbl,
             generated_bbl=generated_bbl,
             review_version=review_version,
+            title=extract_title(_read_tex(cleaned / main_tex.name)),
         )
