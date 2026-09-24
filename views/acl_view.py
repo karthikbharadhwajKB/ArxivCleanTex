@@ -15,8 +15,7 @@ def report_markdown(report, file_name, paper_type):
         if issues:
             lines += ["", f"## {title}", ""]
             lines += [
-                f"- {i.category}: {i.message}" + (f" (×{i.count})" if i.count > 1 else "")
-                for i in issues
+                f"- {i.category}: {i.message}" + (f" (×{i.count})" if i.count > 1 else "") for i in issues
             ]
     return "\n".join(lines) + "\n"
 
@@ -24,14 +23,17 @@ def report_markdown(report, file_name, paper_type):
 def render():
     uploaded = st.file_uploader("Upload your paper (PDF)", type=["pdf"])
 
-    paper_type = st.segmented_control(
-        "Paper type",
-        list(acl.PAPER_TYPES),
-        format_func=acl.PAPER_TYPES.get,
-        default="long",
-        help="Sets the page limit for the main text. References, limitations, "
-        "ethics and acknowledgments may follow it.",
-    ) or "long"
+    paper_type = (
+        st.segmented_control(
+            "Paper type",
+            list(acl.PAPER_TYPES),
+            format_func=acl.PAPER_TYPES.get,
+            default="long",
+            help="Sets the page limit for the main text. References, limitations, "
+            "ethics and acknowledgments may follow it.",
+        )
+        or "long"
+    )
 
     with st.expander("⚙️ Check options"):
         check_bottom = st.checkbox(
@@ -112,10 +114,7 @@ def render():
             expanded = title == "Errors" and not report.likely_review_version
             with st.expander(f"{icon} {category}: {total} {title.lower()}", expanded=expanded):
                 st.markdown(
-                    "\n".join(
-                        f"- {i.message}" + (f" **×{i.count}**" if i.count > 1 else "")
-                        for i in items
-                    )
+                    "\n".join(f"- {i.message}" + (f" **×{i.count}**" if i.count > 1 else "") for i in items)
                 )
 
     if report.page_images:

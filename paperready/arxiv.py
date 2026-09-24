@@ -185,9 +185,7 @@ def _rel(path, base):
 
 
 def _all_tex_files(base):
-    return sorted(
-        p for p in base.rglob("*.tex") if p.is_file() and not _is_ignored(p, base)
-    )
+    return sorted(p for p in base.rglob("*.tex") if p.is_file() and not _is_ignored(p, base))
 
 
 def _match_user_path(base, query):
@@ -199,9 +197,7 @@ def _match_user_path(base, query):
         if _is_ignored(p, base):
             continue
         parts = p.relative_to(base).parts
-        if tuple(x.lower() for x in parts[-len(q_parts):]) == tuple(
-            x.lower() for x in q_parts
-        ):
+        if tuple(x.lower() for x in parts[-len(q_parts) :]) == tuple(x.lower() for x in q_parts):
             matches.append(p)
     return matches
 
@@ -288,9 +284,7 @@ def find_main_tex(base, main_hint=None):
             folder = folders[0]
             in_folder = _all_tex_files(folder)
             if not in_folder:
-                raise NoTexFilesError(
-                    f"The folder “{_rel(folder, base)}” contains no .tex files."
-                )
+                raise NoTexFilesError(f"The folder “{_rel(folder, base)}” contains no .tex files.")
             candidates = [p for p in in_folder if _is_main_candidate(p)]
             if not candidates:
                 raise MainFileNotFoundError(
@@ -394,15 +388,17 @@ def build_cleaner_args(options):
             raise InvalidOptionsError("PNG → JPG quality must be between 0 and 100.")
         args += [
             "--convert_png_to_jpg",
-            "--png_quality", str(int(options.png_quality)),
-            "--png_size_threshold", str(float(options.png_size_threshold)),
+            "--png_quality",
+            str(int(options.png_quality)),
+            "--png_size_threshold",
+            str(float(options.png_size_threshold)),
         ]
 
     if options.images_allowlist.strip():
         try:
             allowlist = json.loads(options.images_allowlist)
         except json.JSONDecodeError as error:
-            raise InvalidOptionsError(f"Image allowlist is not valid JSON: {error}.")
+            raise InvalidOptionsError(f"Image allowlist is not valid JSON: {error}.") from None
         if not isinstance(allowlist, dict) or not all(
             isinstance(v, (int, float)) and not isinstance(v, bool) for v in allowlist.values()
         ):
@@ -413,13 +409,24 @@ def build_cleaner_args(options):
 
     for flag, raw, label, example in (
         ("--commands_to_delete", options.commands_to_delete, "commands to delete", "`todo` for \\todo{...}"),
-        ("--commands_only_to_delete", options.commands_only_to_delete, "commands to unwrap", "`hl` for \\hl{...}"),
-        ("--environments_to_delete", options.environments_to_delete, "environments to delete", "`note` for \\begin{note}"),
+        (
+            "--commands_only_to_delete",
+            options.commands_only_to_delete,
+            "commands to unwrap",
+            "`hl` for \\hl{...}",
+        ),
+        (
+            "--environments_to_delete",
+            options.environments_to_delete,
+            "environments to delete",
+            "`note` for \\begin{note}",
+        ),
     ):
         names, rejected = parse_commands(raw)
         if rejected:
             notes.append(
-                f"Ignored invalid {label}: " + ", ".join(f"`{r}`" for r in rejected)
+                f"Ignored invalid {label}: "
+                + ", ".join(f"`{r}`" for r in rejected)
                 + f". Use letters only, e.g. {example}."
             )
         if names:
@@ -430,7 +437,8 @@ def build_cleaner_args(options):
     names = [n for n in names if n.startswith("if")]
     if rejected:
         notes.append(
-            "Ignored invalid \\if exceptions: " + ", ".join(f"`{r}`" for r in rejected)
+            "Ignored invalid \\if exceptions: "
+            + ", ".join(f"`{r}`" for r in rejected)
             + ". They must start with “if”, e.g. `ifdraft`."
         )
     if names:
@@ -451,7 +459,7 @@ def _load_config(config_bytes):
     try:
         config = yaml.safe_load(config_bytes.decode("utf-8-sig"))
     except (UnicodeDecodeError, yaml.YAMLError) as error:
-        raise InvalidOptionsError(f"The config file is not valid YAML: {error}")
+        raise InvalidOptionsError(f"The config file is not valid YAML: {error}") from None
     if config is None:
         return {}
     if not isinstance(config, dict):
@@ -459,8 +467,7 @@ def _load_config(config_bytes):
     patterns = config.get("patterns_and_insertions") or []
     required = ("pattern", "insertion", "description")
     if not isinstance(patterns, list) or not all(
-        isinstance(p, dict) and all(isinstance(p.get(k), str) for k in required)
-        for p in patterns
+        isinstance(p, dict) and all(isinstance(p.get(k), str) for k in required) for p in patterns
     ):
         raise InvalidOptionsError(
             "Each entry in patterns_and_insertions needs “pattern”, “insertion” "
@@ -515,9 +522,7 @@ def _resolve(root, kind, name, graphic_dirs=("",)):
         candidates = [name] if PurePosixPath(name).suffix else [name + ".tex"]
         candidates.append(name)
     elif kind == "graphics":
-        candidates = [
-            d + name + ext for d in graphic_dirs for ext in ["", *GRAPHICS_EXTS]
-        ]
+        candidates = [d + name + ext for d in graphic_dirs for ext in ["", *GRAPHICS_EXTS]]
     else:  # ".bib", ".sty", ".cls", ".bst"
         candidates = [name, name + kind]
     for candidate in candidates:
@@ -570,9 +575,7 @@ def _scan_references(root, main_tex):
 
         for ext, pattern in _SUPPORT.items():
             for m in pattern.finditer(text):
-                refs += [
-                    (where, ext, n, ()) for n in _split_args(m.group(1)) if _is_literal(n)
-                ]
+                refs += [(where, ext, n, ()) for n in _split_args(m.group(1)) if _is_literal(n)]
 
     return refs, uses_bib
 
@@ -595,12 +598,12 @@ def find_missing_files(root, main_tex, check_bib=True):
 
 
 def _dropped_reason(kind, name, original):
-    if kind == "graphics" and not PurePosixPath(name).suffix:
-        if original.suffix.lower() not in _LOOSE_FIGURE_EXTS:
-            return (
-                f"it is referenced without its extension; write "
-                f"“{name}{original.suffix}”"
-            )
+    if (
+        kind == "graphics"
+        and not PurePosixPath(name).suffix
+        and original.suffix.lower() not in _LOOSE_FIGURE_EXTS
+    ):
+        return f"it is referenced without its extension; write “{name}{original.suffix}”"
     if kind in _SUPPORT and "/" in name and not PurePosixPath(name).suffix:
         return (
             f"files in subfolders need the extension in the reference; write "
@@ -712,9 +715,7 @@ def generate_bbl(original_root, cleaned_root, main_name):
     reason; unknown_keys are citations BibTeX found in no .bib file.
     """
     main_tex = cleaned_root / main_name
-    text = "\n".join(
-        _strip_comments(_read_tex(p)) for p in cleaned_root.rglob("*.tex")
-    )
+    text = "\n".join(_strip_comments(_read_tex(p)) for p in cleaned_root.rglob("*.tex"))
     if _BIBLATEX.search(text):
         return "biblatex needs Biber, which this app cannot run", []
     bibtex = shutil.which("bibtex")
@@ -759,9 +760,7 @@ def generate_bbl(original_root, cleaned_root, main_name):
         aux += [f"\\bibstyle{{{style}}}", f"\\bibdata{{{','.join(databases)}}}"]
         (work / "paper.aux").write_text("\n".join(aux) + "\n", encoding="utf-8")
         try:
-            run = subprocess.run(
-                [bibtex, "paper"], cwd=work, capture_output=True, text=True, timeout=60
-            )
+            run = subprocess.run([bibtex, "paper"], cwd=work, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
             return "BibTeX took too long", []
         bbl = work / "paper.bbl"
@@ -806,12 +805,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
                 "cannot read; it was converted to UTF-8."
             )
         in_root = [p for p in restore if root in p.parents]
-        sources = [
-            p for p in root.rglob("*") if p.suffix in (".tex", ".sty", ".cls") and p.is_file()
-        ]
-        if in_root and not any(
-            _declares_encoding(_strip_comments(_read_tex(p))) for p in sources
-        ):
+        sources = [p for p in root.rglob("*") if p.suffix in (".tex", ".sty", ".cls") and p.is_file()]
+        if in_root and not any(_declares_encoding(_strip_comments(_read_tex(p))) for p in sources):
             names = ", ".join(f"“{_rel(p, src)}”" for p in in_root)
             warnings.append(
                 f"{names} is not valid UTF-8 and your sources do not declare an "
@@ -824,20 +819,14 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
 
         # The cleaner treats .tex files in its input root as entry points, so it
         # must run on the folder that holds the main file.
-        outside = [
-            p
-            for p in _all_tex_files(src)
-            if root != p.parent and root not in p.parents
-        ]
+        outside = [p for p in _all_tex_files(src) if root != p.parent and root not in p.parents]
         if outside:
             warnings.append(
                 f"{len(outside)} .tex file(s) outside “{_rel(root, src) or '.'}” "
                 "were ignored because they are not inside the main file's folder."
             )
 
-        wrong_case = [
-            p for p in root.rglob("*") if p.suffix.lower() == ".tex" and p.suffix != ".tex"
-        ]
+        wrong_case = [p for p in root.rglob("*") if p.suffix.lower() == ".tex" and p.suffix != ".tex"]
         if wrong_case:
             names = ", ".join(f"“{_rel(p, src)}”" for p in wrong_case[:5])
             warnings.append(
@@ -862,7 +851,11 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
         for flag, label in (("--use_external_tikz", "External TikZ"), ("--svg_inkscape", "Inkscape SVG")):
             if flag in extra_args:
                 i = extra_args.index(flag) + 1
-                folder = extra_args[i] if i < len(extra_args) and not extra_args[i].startswith("--") else "svg-inkscape"
+                folder = (
+                    extra_args[i]
+                    if i < len(extra_args) and not extra_args[i].startswith("--")
+                    else "svg-inkscape"
+                )
                 if not (staged / folder).is_dir():
                     warnings.append(
                         f"{label} folder “{folder}” was not found next to "
@@ -889,8 +882,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
 
         if not (cleaned / main_tex.name).is_file():
             raise CleaningFailedError(
-                f"The cleaner did not keep {main_tex.name}; the output would be "
-                "unusable on arXiv."
+                f"The cleaner did not keep {main_tex.name}; the output would be unusable on arXiv."
             )
 
         _restore_encodings(restore_rel, cleaned)
@@ -926,16 +918,11 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
             "\n".join(_strip_comments(_read_tex(p)) for p in sorted(cleaned.rglob("*.tex")))
         )
         if review_version:
-            warnings.append(
-                f"This looks like a submission version, not a final one: {review_version}."
-            )
+            warnings.append(f"This looks like a submission version, not a final one: {review_version}.")
 
         dropped = find_dropped_files(staged, cleaned, main_tex.name)
         for ref, reason in dropped[:10]:
-            warnings.append(
-                f"arxiv_latex_cleaner left out “{ref}”, which your paper still "
-                f"uses: {reason}."
-            )
+            warnings.append(f"arxiv_latex_cleaner left out “{ref}”, which your paper still uses: {reason}.")
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:

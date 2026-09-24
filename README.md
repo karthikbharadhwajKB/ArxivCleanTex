@@ -174,22 +174,42 @@ tells you when one of them is needed:
 | Generate `.bbl` | BibTeX + standard styles | `apt install texlive-binaries texlive-base` | `brew install --cask mactex-no-gui` |
 | Compress PDF figures | Ghostscript | `apt install ghostscript` | `brew install ghostscript` |
 
-## Run the tests
+## Tests and CI
 
 ```bash
-uv run pytest
+uv run pytest                  # all tests
+uv run pytest --cov            # with coverage (must stay ≥ 95%)
+uv run pytest -m "not e2e"     # skip the browser tests
+uv run ruff check . && uv run ruff format --check .   # lint and format
 ```
 
-- **`tests/test_arxiv.py`** covers the whole pipeline: zip extraction, junk
-  and encoding handling, main-file detection, reference checks, every cleaner
-  option, `.bbl` generation, and byte-for-byte parity with
-  `arxiv_latex_cleaner`.
-- **`tests/test_streamlit_app.py`** drives the web UI with Streamlit's
-  `AppTest`.
-- **`tests/test_acl.py`** covers the ACL mode: grouping, review-version
-  detection, error handling and real aclpubcheck runs.
-- **Tests that need BibTeX or pdflatex** are skipped when those aren't
-  installed.
+- **`tests/test_arxiv.py`:** the whole arXiv pipeline:
+  - zip extraction, and junk and encoding handling
+  - main-file detection and reference checks
+  - every cleaner option and `.bbl` generation
+  - review-version detection
+  - byte-for-byte parity with `arxiv_latex_cleaner`
+- **`tests/test_acl.py`:** the ACL check:
+  - grouping and review-version detection
+  - error handling
+  - real aclpubcheck runs
+- **`tests/test_streamlit_app.py`:** the UI through Streamlit's `AppTest`.
+- **`tests/test_e2e.py`:** the real app in Chromium. It uploads files, cleans
+  and checks them, and downloads the results.
+
+Tests that need BibTeX, pdflatex or a browser are skipped when those aren't
+installed. Locally, `uv run playwright install chromium` sets up the browser.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and on every
+pull request:
+- **Lint:** `ruff check` and `ruff format --check`.
+- **Tests:** on Python 3.10 and 3.12, with TeX Live, BibTeX, Ghostscript and
+  Chromium installed.
+- **No skipped tests:** `PAPERREADY_REQUIRE_ALL_TESTS=1` turns any skipped test
+  into a failure.
+- **Coverage:** below 95% fails the build.
+
+New code needs tests to pass CI.
 
 ## Deploy it live (free)
 
@@ -235,6 +255,7 @@ requirements.txt            Python dependencies for Streamlit Community Cloud
 packages.txt                system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
 pyproject.toml              dependencies for local development with uv
 tests/                      pytest suite (uv run pytest)
+.github/workflows/ci.yml    CI: lint and tests on every push and pull request
 ```
 
 ## Author

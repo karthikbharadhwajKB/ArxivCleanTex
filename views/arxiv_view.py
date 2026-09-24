@@ -20,7 +20,6 @@ def file_table(files):
     return [{"File": name, "Size": human_size(size)} for name, size in files.items()]
 
 
-
 def render():
     # --- Inputs ---------------------------------------------------------------------
 
@@ -42,9 +41,7 @@ def render():
             "All options are passed to arxiv_latex_cleaner; defaults match its own. "
             "Folders and image paths are relative to the main file's folder."
         )
-        content_tab, images_tab, other_tab = st.tabs(
-            ["✂️ Remove content", "🖼️ Images", "🧩 Other"]
-        )
+        content_tab, images_tab, other_tab = st.tabs(["✂️ Remove content", "🖼️ Images", "🧩 Other"])
 
         with content_tab:
             commands = st.text_input(
@@ -69,18 +66,27 @@ def render():
             resize = st.checkbox("Resize images to reduce size")
             im_size = st.number_input(
                 "Max image size (pixels, longest side)",
-                min_value=100, value=500, step=100, disabled=not resize,
+                min_value=100,
+                value=500,
+                step=100,
+                disabled=not resize,
             )
             convert_png = st.checkbox("Convert PNG images to JPG")
             png_quality = st.slider("JPG quality", 0, 100, 50, disabled=not convert_png)
             png_threshold = st.number_input(
                 "Only convert PNGs larger than (MB)",
-                min_value=0.0, value=0.5, step=0.1, disabled=not convert_png,
+                min_value=0.0,
+                value=0.5,
+                step=0.1,
+                disabled=not convert_png,
             )
             compress_pdf = st.checkbox("Compress PDF figures (Ghostscript)")
             pdf_resolution = st.number_input(
                 "PDF image resolution (dpi)",
-                min_value=50, value=500, step=50, disabled=not compress_pdf,
+                min_value=50,
+                value=500,
+                step=50,
+                disabled=not compress_pdf,
             )
             images_allowlist = st.text_area(
                 "Image allowlist (JSON: path → size in pixels, or dpi for PDFs)",
@@ -112,9 +118,7 @@ def render():
             )
 
     if uploaded is None:
-        st.info(
-            "👆 Drop your project's .zip above to get started."
-        )
+        st.info("👆 Drop your project's .zip above to get started.")
         st.stop()
 
     # --- Cleaning -------------------------------------------------------------------
@@ -185,18 +189,25 @@ def render():
 
     files_col, size_col, main_col = st.columns(3)
     files_col.metric(
-        "Files", len(result.output_files), delta=f"-{len(removed)} files" if removed else None,
-        delta_color="off", border=True,
+        "Files",
+        len(result.output_files),
+        delta=f"-{len(removed)} files" if removed else None,
+        delta_color="off",
+        border=True,
     )
     size_col.metric(
-        "Size", human_size(size_out),
+        "Size",
+        human_size(size_out),
         delta=f"-{100 * (1 - size_out / size_in):.0f}%" if size_in else None,
-        delta_color="inverse", border=True,
+        delta_color="inverse",
+        border=True,
     )
     main_col.metric(
-        main_name, human_size(main_out),
+        main_name,
+        human_size(main_out),
         delta=f"-{100 * (1 - main_out / main_in):.0f}% comments & drafts" if main_in else None,
-        delta_color="off", border=True,
+        delta_color="off",
+        border=True,
     )
 
     checks = [
@@ -231,9 +242,7 @@ def render():
     for warning in result.warnings:
         st.warning(warning)
     if result.missing_files:
-        lines = "\n".join(
-            f"- `{ref}` (referenced in `{source}`)" for source, ref in result.missing_files
-        )
+        lines = "\n".join(f"- `{ref}` (referenced in `{source}`)" for source, ref in result.missing_files)
         st.warning(
             "These files are referenced but missing from your upload, so "
             "arXiv will fail to compile. Add them to the zip and re-upload:"
@@ -241,7 +250,9 @@ def render():
         )
 
     with st.expander(f"📂 What changed: {len(result.output_files)} kept, {len(removed)} removed"):
-        kept_tab, removed_tab = st.tabs([f"✅ Kept ({len(result.output_files)})", f"🗑️ Removed ({len(removed)})"])
+        kept_tab, removed_tab = st.tabs(
+            [f"✅ Kept ({len(result.output_files)})", f"🗑️ Removed ({len(removed)})"]
+        )
         kept_tab.dataframe(file_table(result.output_files), hide_index=True, width="stretch")
         removed_tab.dataframe(file_table(removed), hide_index=True, width="stretch")
 

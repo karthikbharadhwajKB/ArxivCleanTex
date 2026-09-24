@@ -10,8 +10,8 @@ from paperready.acl import (
     AclCheckFailedError,
     AclCheckUnavailableError,
     AclReport,
-    Issue,
     InvalidPdfError,
+    Issue,
     check_pdf,
 )
 
@@ -25,9 +25,7 @@ def latex_pdf(tmp_path, body, preamble=""):
     tex.write_text(
         f"\\documentclass{{article}}\n{preamble}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
     )
-    subprocess.run(
-        ["pdflatex", "-interaction=nonstopmode", tex.name], cwd=tmp_path, capture_output=True
-    )
+    subprocess.run(["pdflatex", "-interaction=nonstopmode", tex.name], cwd=tmp_path, capture_output=True)
     return (tmp_path / "paper.pdf").read_bytes()
 
 
@@ -74,7 +72,9 @@ class TestGroup:
         assert not acl._looks_like_review_version({})
 
     def test_report_properties(self):
-        report = AclReport(errors=[Issue("Margins", "a", 3), Issue("Fonts", "b")], warnings=[Issue("References", "c", 2)])
+        report = AclReport(
+            errors=[Issue("Margins", "a", 3), Issue("Fonts", "b")], warnings=[Issue("References", "c", 2)]
+        )
         assert (report.passed, report.error_count, report.warning_count) == (False, 4, 2)
         assert AclReport().passed
 
@@ -220,3 +220,22 @@ def test_anonymous_first_page_in_a_real_pdf(tmp_path):
     assert acl._anonymous_first_page(path)
     path.write_bytes(latex_pdf(tmp_path, "Jane Doe, University of Somewhere\n\nText"))
     assert not acl._anonymous_first_page(path)
+
+
+@needs_latex
+def test_runner_in_process(tmp_path, monkeypatch):
+    """Runs acl_runner.main directly (normally it runs in a subprocess)."""
+    from paperready import acl_runner
+
+    pdf = latex_pdf(tmp_path, "\\lipsum[1-60]\n\\section*{References}\nX", "\\usepackage{lipsum}")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "paper.pdf").write_bytes(pdf)
+    monkeypatch.chdir(work)
+    acl_runner.main(["paper.pdf", "short", "1", "1", "0"])
+    logs = json.loads((work / "errors-paper.json").read_text())
+    assert "Error.PAGELIMIT" in logs and "Warn.BIB" in logs
+    from aclpubcheck import formatchecker
+
+    assert formatchecker.args.disable_bottom_check is True
+    assert formatchecker.args.disable_name_check is False

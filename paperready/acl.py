@@ -109,10 +109,7 @@ def _group(logs):
 
 def _looks_like_review_version(logs):
     margin = logs.get("Error.MARGIN", [])
-    return (
-        len(margin) >= _REVIEW_MIN_ERRORS
-        and len(margin) >= _REVIEW_MIN_REPEATS * len(set(margin))
-    )
+    return len(margin) >= _REVIEW_MIN_ERRORS and len(margin) >= _REVIEW_MIN_REPEATS * len(set(margin))
 
 
 def _anonymous_first_page(pdf_path):
@@ -127,8 +124,9 @@ def _anonymous_first_page(pdf_path):
     return bool(_ANONYMOUS.search(text))
 
 
-def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=True,
-              check_names=False, timeout=300):
+def check_pdf(
+    pdf_bytes, paper_type="long", check_bottom=True, check_references=True, check_names=False, timeout=300
+):
     """Runs aclpubcheck on a PDF and returns an AclReport."""
     if paper_type not in PAPER_TYPES:
         raise InvalidPdfError(f"Unknown paper type “{paper_type}”.")
@@ -148,7 +146,7 @@ def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=
         except subprocess.TimeoutExpired:
             raise AclCheckFailedError(
                 f"The check took longer than {timeout // 60} minutes and was stopped."
-            )
+            ) from None
         log_file = work / "errors-paper.json"
         if run.returncode != 0 or not log_file.is_file():
             details = (run.stderr or run.stdout or "").strip()
@@ -164,10 +162,7 @@ def check_pdf(pdf_bytes, paper_type="long", check_bottom=True, check_references=
         logs = json.loads(log_file.read_text())
         errors, warnings = _group(logs)
         anonymous = _anonymous_first_page(work / "paper.pdf")
-        images = {
-            int(p.stem.rsplit("-", 1)[1]): p.read_bytes()
-            for p in work.glob("errors-paper-page-*.png")
-        }
+        images = {int(p.stem.rsplit("-", 1)[1]): p.read_bytes() for p in work.glob("errors-paper-page-*.png")}
     return AclReport(
         errors=errors,
         warnings=warnings,

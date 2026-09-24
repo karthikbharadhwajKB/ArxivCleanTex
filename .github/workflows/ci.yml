@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Ruff lint
+        run: uv run --only-dev ruff check .
+      - name: Ruff format
+        run: uv run --only-dev ruff format --check .
+
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    env:
+      # Every test must run in CI: skipping for a missing tool fails the build.
+      PAPERREADY_REQUIRE_ALL_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install TeX Live, BibTeX and Ghostscript
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-binaries texlive-base texlive-latex-base \
+            texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended ghostscript
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Install Chromium for the browser tests
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run the tests with coverage
+        run: uv run pytest -ra --cov --cov-report=term-missing

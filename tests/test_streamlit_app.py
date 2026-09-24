@@ -2,8 +2,8 @@ import pytest
 import streamlit
 from streamlit.testing.v1 import AppTest
 
-from paperready import arxiv as cleaner
 from helpers import doc, make_zip, unzip
+from paperready import arxiv as cleaner
 
 APP = "streamlit_app.py"
 
@@ -166,7 +166,10 @@ def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatc
     button(at, "Clean my paper").click().run()
     assert "Ghostscript" in at.error[0].value
     assert spy_clean_zip[-1]["extra_args"][4:8] == [
-        "--compress_pdf", "--pdf_im_resolution", "300", "--convert_png_to_jpg"
+        "--compress_pdf",
+        "--pdf_im_resolution",
+        "300",
+        "--convert_png_to_jpg",
     ]
 
     widget(at.checkbox, "Compress PDF figures (Ghostscript)").uncheck()
@@ -175,15 +178,29 @@ def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatc
     assert spy_clean_zip[-1] == {
         "extra_args": [
             "--keep_bib",
-            "--resize_images", "--im_size", "800",
-            "--convert_png_to_jpg", "--png_quality", "70", "--png_size_threshold", "1.5",
-            "--images_allowlist", '{"figs/a.png": 2000}',
-            "--commands_to_delete", "todo", "note",
-            "--commands_only_to_delete", "hl",
-            "--environments_to_delete", "comment",
-            "--if_exceptions", "ifdraft",
-            "--use_external_tikz", "tikz",
-            "--svg_inkscape", "svgs",
+            "--resize_images",
+            "--im_size",
+            "800",
+            "--convert_png_to_jpg",
+            "--png_quality",
+            "70",
+            "--png_size_threshold",
+            "1.5",
+            "--images_allowlist",
+            '{"figs/a.png": 2000}',
+            "--commands_to_delete",
+            "todo",
+            "note",
+            "--commands_only_to_delete",
+            "hl",
+            "--environments_to_delete",
+            "comment",
+            "--if_exceptions",
+            "ifdraft",
+            "--use_external_tikz",
+            "tikz",
+            "--svg_inkscape",
+            "svgs",
         ],
         "main_hint": "p2",
         "config": config,
@@ -289,7 +306,14 @@ def test_results_dashboard_when_ready(upload):
 
 
 def test_results_dashboard_lists_problems(upload):
-    upload(make_zip({"main.tex": doc("\\includegraphics{gone}\\includegraphics{figs/d}\\bibliography{refs}"), "figs/d.eps": "x"}))
+    upload(
+        make_zip(
+            {
+                "main.tex": doc("\\includegraphics{gone}\\includegraphics{figs/d}\\bibliography{refs}"),
+                "figs/d.eps": "x",
+            }
+        )
+    )
     at = click_clean(run_app())
     checklist = next(m for m in at.markdown.values if "Every referenced file" in m)
     assert "⚠️ Every referenced file is in the upload" in checklist
@@ -311,7 +335,11 @@ def test_what_changed_lists_files(upload):
 @pytest.mark.skipif(not cleaner.shutil.which("bibtex"), reason="BibTeX not installed")
 def test_generated_bbl_is_announced(upload):
     bib = "@article{a, author = {Ann A}, title = {T}, journal = {J}, year = {2020}}"
-    upload(make_zip({"main.tex": doc("\\cite{a}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": bib}))
+    upload(
+        make_zip(
+            {"main.tex": doc("\\cite{a}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": bib}
+        )
+    )
     at = click_clean(run_app())
     assert "Generated `main.bbl` with BibTeX" in at.info[0].value
     checklist = next(m for m in at.markdown.values if "Bibliography compiled" in m)
@@ -323,7 +351,6 @@ def test_generated_bbl_is_announced(upload):
 
 from paperready import acl  # noqa: E402
 from paperready.acl import AclReport, Issue  # noqa: E402
-
 
 
 def run_acl_mode():
@@ -480,3 +507,23 @@ def test_review_version_in_checklist(upload):
     checklist = next(m for m in at.markdown.values if "Final version" in m)
     assert "⚠️ Final version, not the anonymous submission" in checklist
     assert any("submission version, not a final one" in w.value for w in at.warning)
+
+
+def test_acl_unexpected_error(upload, monkeypatch):
+    def crash(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(acl, "check_pdf", crash)
+    upload(b"%PDF-1.5", name="paper.pdf")
+    at = run_acl_mode()
+    button(at, "Check my paper").click().run()
+    assert at.error[0].value == "Something went wrong while checking: disk full"
+
+
+@pytest.mark.parametrize(
+    "size, text", [(0, "0 B"), (1023, "1023 B"), (2048, "2.0 KB"), (5 * 1024 * 1024, "5.0 MB")]
+)
+def test_human_size(size, text):
+    from views.arxiv_view import human_size
+
+    assert human_size(size) == text

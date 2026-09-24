@@ -20,9 +20,38 @@ aclpubcheck = { git = "https://github.com/acl-org/aclpubcheck", rev = "237bee3a5
 
 [dependency-groups]
 dev = [
+    "playwright>=1.63.0",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.8",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+markers = ["e2e: runs the real app in a browser (needs Playwright and Chromium)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, simplify, ruff.
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",    # long strings (messages, regexes) are clearer unwrapped
+    "RUF001",  # the UI deliberately uses typographic quotes and dashes
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["paperready", "views", "helpers"]
+
+[tool.coverage.run]
+source = ["paperready", "views", "streamlit_app"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true

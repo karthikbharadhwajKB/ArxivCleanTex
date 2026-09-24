@@ -1,13 +1,15 @@
 import io
 import os
+import re
 import struct
 import zipfile
+from pathlib import Path
 
 import pytest
 
+from helpers import doc, make_raw_name_zip, make_zip, unzip
 from paperready import arxiv as cleaner
 from paperready import core
-from paperready.core import InvalidZipError
 from paperready.arxiv import (
     AmbiguousMainFileError,
     CleanerOptions,
@@ -17,12 +19,12 @@ from paperready.arxiv import (
     NoTexFilesError,
     build_cleaner_args,
     clean_zip,
-    find_main_tex,
     find_dropped_files,
+    find_main_tex,
     find_missing_files,
     parse_commands,
 )
-from helpers import doc, make_raw_name_zip, make_zip, unzip
+from paperready.core import InvalidZipError
 
 APPLE_DOUBLE = (
     struct.pack(">IIH", 0x00051607, 0x00020000, 0)
@@ -44,7 +46,7 @@ class TestEntryName:
         assert core._entry_name(info) == "paper/figs/plot.png"
 
     def test_utf8_bytes_without_flag_are_decoded_as_utf8(self):
-        info = zipfile.ZipInfo("résumé.tex".encode("utf-8").decode("cp437"))
+        info = zipfile.ZipInfo("résumé.tex".encode().decode("cp437"))
         info.flag_bits &= ~0x800
         assert core._entry_name(info) == "résumé.tex"
 
@@ -76,11 +78,11 @@ class TestSafeExtract:
         assert (tmp_path / "résumé/图.tex").is_file()
 
     def test_not_a_zip(self, tmp_path):
-        with pytest.raises(InvalidZipError, match="not a valid .zip"):
+        with pytest.raises(InvalidZipError, match=re.escape("not a valid .zip")):
             core._safe_extract(b"definitely not a zip", tmp_path)
 
     def test_truncated_zip(self, tmp_path):
-        with pytest.raises(InvalidZipError, match="not a valid .zip"):
+        with pytest.raises(InvalidZipError, match=re.escape("not a valid .zip")):
             core._safe_extract(make_zip({"main.tex": doc()})[:40], tmp_path)
 
     @pytest.mark.parametrize("name", ["../evil.tex", "/etc/evil.tex", "a/../../evil.tex"])
@@ -166,7 +168,7 @@ class TestEncodings:
         assert len(text.splitlines()) == 1 and not text[1].isspace()
 
     def test_encode_back_handles_every_high_byte(self):
-        data = bytes(range(0x80, 0x100)) + "é".encode("utf-8")
+        data = bytes(range(0x80, 0x100)) + "é".encode()
         text = data.decode("utf-8", errors="paperready_pua")
         assert cleaner._encode_back(text) == data
 
@@ -201,7 +203,7 @@ class TestEncodings:
             "\\usepackage[utf8,latin9]{inputenc}",
             "\\inputencoding{latin2}",
             "\\begin{CJK}{GBK}{song}",
-            "\\XeTeXinputencoding \"cp1252\"",
+            '\\XeTeXinputencoding "cp1252"',
         ],
     )
     def test_declares_encoding(self, text):
@@ -282,12 +284,12 @@ class TestFindMainTex:
 
     def test_ambiguous(self, tree):
         base = tree({"p1/main.tex": doc(), "p2/main.tex": doc()})
-        with pytest.raises(AmbiguousMainFileError, match="p1/main.tex"):
+        with pytest.raises(AmbiguousMainFileError, match=re.escape("p1/main.tex")):
             find_main_tex(base)
 
     def test_no_tex_files(self, tree):
         base = tree({"paper.pdf": "x"})
-        with pytest.raises(NoTexFilesError, match="No .tex files"):
+        with pytest.raises(NoTexFilesError, match=re.escape("No .tex files")):
             find_main_tex(base)
 
     def test_only_upper_case_extension(self, tree):
@@ -297,10 +299,12 @@ class TestFindMainTex:
 
     def test_no_candidate(self, tree):
         base = tree({"a.tex": "x", "b.tex": "y"})
-        with pytest.raises(MainFileNotFoundError, match="a.tex"):
+        with pytest.raises(MainFileNotFoundError, match=re.escape("a.tex")):
             find_main_tex(base)
 
-    @pytest.mark.parametrize("hint", ["paper.tex", "paper", "src/paper.tex", "SRC/PAPER.TEX", "  paper.tex  "])
+    @pytest.mark.parametrize(
+        "hint", ["paper.tex", "paper", "src/paper.tex", "SRC/PAPER.TEX", "  paper.tex  "]
+    )
     def test_hint_file(self, tree, hint):
         base = tree({"src/paper.tex": doc(), "main.tex": doc()})
         assert find_main_tex(base, hint) == base / "src/paper.tex"
@@ -322,7 +326,7 @@ class TestFindMainTex:
 
     def test_hint_not_found_lists_files(self, tree):
         base = tree({"main.tex": doc()})
-        with pytest.raises(MainFileNotFoundError, match="main.tex"):
+        with pytest.raises(MainFileNotFoundError, match=re.escape("main.tex")):
             find_main_tex(base, "nope.tex")
 
     def test_hint_matches_several_files(self, tree):
@@ -611,7 +615,9 @@ class TestCleanZip:
 
     def test_commands_to_delete(self):
         names, _ = parse_commands("\\todo note")
-        result = clean_zip(make_zip({"main.tex": doc("A\\todo{secret}B\\note{x}C")}), ["--commands_to_delete", *names])
+        result = clean_zip(
+            make_zip({"main.tex": doc("A\\todo{secret}B\\note{x}C")}), ["--commands_to_delete", *names]
+        )
         assert b"ABC" in unzip(result.zip_bytes)["main.tex"]
 
     def test_keep_bib(self):
@@ -654,8 +660,7 @@ class TestCleanZip:
         files = {
             "main.tex": doc(
                 "\\includegraphics{figs/diagram}\\includegraphics{figs/ok.eps}",
-                "\\usepackage{amsmath,rootstyle}\\usepackage{styles/sub}"
-                "\\usepackage{styles/exact.sty}",
+                "\\usepackage{amsmath,rootstyle}\\usepackage{styles/sub}\\usepackage{styles/exact.sty}",
             ),
             "figs/diagram.eps": "x",
             "figs/ok.eps": "x",
@@ -665,7 +670,10 @@ class TestCleanZip:
         }
         result = clean_zip(make_zip(files))
         assert sorted(unzip(result.zip_bytes)) == [
-            "figs/ok.eps", "main.tex", "rootstyle.sty", "styles/exact.sty"
+            "figs/ok.eps",
+            "main.tex",
+            "rootstyle.sty",
+            "styles/exact.sty",
         ]
         assert result.warnings == [
             "arxiv_latex_cleaner left out “figs/diagram”, which your paper still "
@@ -726,7 +734,7 @@ class TestCleanZip:
             return Succeeded()
 
         monkeypatch.setattr(cleaner.subprocess, "run", fake_run)
-        with pytest.raises(CleaningFailedError, match="did not keep main.tex"):
+        with pytest.raises(CleaningFailedError, match=re.escape("did not keep main.tex")):
             clean_zip(make_zip({"main.tex": doc()}))
 
 
@@ -778,9 +786,7 @@ def test_output_is_exactly_what_arxiv_latex_cleaner_produces(tmp_path, extra_arg
     )
     upstream_out = tmp_path / "project_arXiv"
     expected = {
-        p.relative_to(upstream_out).as_posix(): p.read_bytes()
-        for p in upstream_out.rglob("*")
-        if p.is_file()
+        p.relative_to(upstream_out).as_posix(): p.read_bytes() for p in upstream_out.rglob("*") if p.is_file()
     }
 
     for layout in ("", "nested/folder/"):
@@ -816,31 +822,52 @@ class TestBuildCleanerArgs:
         args, notes = build_cleaner_args(
             CleanerOptions(
                 keep_bib=True,
-                resize_images=True, im_size=800,
-                compress_pdf=True, pdf_im_resolution=300,
+                resize_images=True,
+                im_size=800,
+                compress_pdf=True,
+                pdf_im_resolution=300,
                 images_allowlist='{"a.png": 2000, "b.pdf": 150}',
-                convert_png_to_jpg=True, png_quality=70, png_size_threshold=1.5,
+                convert_png_to_jpg=True,
+                png_quality=70,
+                png_size_threshold=1.5,
                 commands_to_delete="\\todo note",
                 commands_only_to_delete="hl",
                 environments_to_delete="comment",
                 if_exceptions="\\ifdraft",
                 use_external_tikz="\\tikz\\out\\",
-                svg_inkscape=True, svg_inkscape_path="svgs/",
+                svg_inkscape=True,
+                svg_inkscape_path="svgs/",
             )
         )
         assert notes == []
         assert args == [
             "--keep_bib",
-            "--resize_images", "--im_size", "800",
-            "--compress_pdf", "--pdf_im_resolution", "300",
-            "--convert_png_to_jpg", "--png_quality", "70", "--png_size_threshold", "1.5",
-            "--images_allowlist", '{"a.png": 2000, "b.pdf": 150}',
-            "--commands_to_delete", "todo", "note",
-            "--commands_only_to_delete", "hl",
-            "--environments_to_delete", "comment",
-            "--if_exceptions", "ifdraft",
-            "--use_external_tikz", "tikz/out",
-            "--svg_inkscape", "svgs",
+            "--resize_images",
+            "--im_size",
+            "800",
+            "--compress_pdf",
+            "--pdf_im_resolution",
+            "300",
+            "--convert_png_to_jpg",
+            "--png_quality",
+            "70",
+            "--png_size_threshold",
+            "1.5",
+            "--images_allowlist",
+            '{"a.png": 2000, "b.pdf": 150}',
+            "--commands_to_delete",
+            "todo",
+            "note",
+            "--commands_only_to_delete",
+            "hl",
+            "--environments_to_delete",
+            "comment",
+            "--if_exceptions",
+            "ifdraft",
+            "--use_external_tikz",
+            "tikz/out",
+            "--svg_inkscape",
+            "svgs",
         ]
 
     def test_dependent_values_ignored_when_off(self):
@@ -860,9 +887,12 @@ class TestBuildCleanerArgs:
             )
         )
         assert args == [
-            "--commands_to_delete", "todo",
-            "--environments_to_delete", "note",
-            "--if_exceptions", "ifok",
+            "--commands_to_delete",
+            "todo",
+            "--environments_to_delete",
+            "note",
+            "--if_exceptions",
+            "ifok",
         ]
         assert len(notes) == 4
         assert "`x-y`" in notes[0] and "`a*`" in notes[1] and "`note2`" in notes[2]
@@ -909,13 +939,23 @@ class TestConfig:
 
     def test_scalar_config_values_become_flags(self):
         config = {
-            "resize_images": True, "im_size": 150, "keep_bib": False,
-            "svg_inkscape": True, "use_external_tikz": "tikz", "png_size_threshold": 0.1,
+            "resize_images": True,
+            "im_size": 150,
+            "keep_bib": False,
+            "svg_inkscape": True,
+            "use_external_tikz": "tikz",
+            "png_size_threshold": 0.1,
             "commands_to_delete": ["todo"],
         }
         assert cleaner._config_scalar_args(config, []) == [
-            "--resize_images", "--im_size", "150", "--png_size_threshold", "0.1",
-            "--use_external_tikz", "tikz", "--svg_inkscape",
+            "--resize_images",
+            "--im_size",
+            "150",
+            "--png_size_threshold",
+            "0.1",
+            "--use_external_tikz",
+            "tikz",
+            "--svg_inkscape",
         ]
 
     def test_config_folders_must_stay_inside_project(self):
@@ -938,7 +978,9 @@ class TestCleanZipOptions:
     def test_content_options(self):
         result = self.clean(
             {"main.tex": doc("A\\hl{kept}B\\todo{gone}C\\begin{note}secret\\end{note}D")},
-            commands_to_delete="todo", commands_only_to_delete="hl", environments_to_delete="note",
+            commands_to_delete="todo",
+            commands_only_to_delete="hl",
+            environments_to_delete="note",
         )
         assert b"AkeptBCD" in self.body(result)
 
@@ -948,7 +990,9 @@ class TestCleanZipOptions:
             "a.png": png_bytes(1000, 800),
             "b.png": png_bytes(1000, 800),
         }
-        out = unzip(self.clean(files, resize_images=True, im_size=200, images_allowlist='{"b.png": 600}').zip_bytes)
+        out = unzip(
+            self.clean(files, resize_images=True, im_size=200, images_allowlist='{"b.png": 600}').zip_bytes
+        )
         assert image_size(out["a.png"]) == (200, 160)
         assert image_size(out["b.png"]) == (600, 480)
 
@@ -972,7 +1016,7 @@ class TestCleanZipOptions:
         # A stand-in `gs` that copies the input, to check the option reaches it.
         fake_gs = tmp_path / "gs"
         fake_gs.write_text(
-            '#!/bin/sh\nfor a; do case $a in -sOutputFile=*) out=${a#-sOutputFile=};; esac; done\n'
+            "#!/bin/sh\nfor a; do case $a in -sOutputFile=*) out=${a#-sOutputFile=};; esac; done\n"
             'echo compressed > "$out"\n'
         )
         fake_gs.chmod(0o755)
@@ -1006,7 +1050,9 @@ class TestCleanZipOptions:
         result = self.clean(files, svg_inkscape=True)
         assert b"\\includeinkscape{svg-inkscape/d_svg-tex.pdf_tex}" in self.body(result)
         assert sorted(unzip(result.zip_bytes)) == [
-            "main.tex", "svg-inkscape/d_svg-tex.pdf", "svg-inkscape/d_svg-tex.pdf_tex"
+            "main.tex",
+            "svg-inkscape/d_svg-tex.pdf",
+            "svg-inkscape/d_svg-tex.pdf_tex",
         ]
 
     def test_config_file(self):
@@ -1070,16 +1116,21 @@ class TestGenerateBbl:
         assert bbl_keys(clean_zip(make_zip(files))) == ["alpha"]
 
     def test_nocite_star(self):
-        files = {"main.tex": doc("\\nocite{*}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        files = {
+            "main.tex": doc("\\nocite{*}\\bibliographystyle{plain}\\bibliography{refs}"),
+            "refs.bib": BIB,
+        }
         assert sorted(bbl_keys(clean_zip(make_zip(files)))) == ["alpha", "beta", "gamma"]
 
     def test_style_set_in_sty_and_uploaded_bst(self):
         # Like the ACL template: the .sty sets the style, the .bst is uploaded.
-        plain = cleaner.subprocess.run(["kpsewhich", "plain.bst"], capture_output=True, text=True).stdout.strip()
+        plain = cleaner.subprocess.run(
+            ["kpsewhich", "plain.bst"], capture_output=True, text=True
+        ).stdout.strip()
         files = {
             "main.tex": doc("\\cite{alpha}\\bibliography{refs}", "\\usepackage{venue}"),
             "venue.sty": "\\bibliographystyle{venue_natbib}",
-            "venue_natbib.bst": open(plain).read(),
+            "venue_natbib.bst": Path(plain).read_text(),
             "refs.bib": BIB,
         }
         result = clean_zip(make_zip(files))
@@ -1093,7 +1144,10 @@ class TestGenerateBbl:
         assert bbl_keys(clean_zip(make_zip(files))) == ["alpha"]
 
     def test_unknown_keys_are_reported(self):
-        files = {"main.tex": doc("\\cite{alpha,nope}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        files = {
+            "main.tex": doc("\\cite{alpha,nope}\\bibliographystyle{plain}\\bibliography{refs}"),
+            "refs.bib": BIB,
+        }
         result = clean_zip(make_zip(files))
         assert result.generated_bbl == "main.bbl"
         assert any("“nope”" in w for w in result.warnings)
@@ -1108,7 +1162,10 @@ class TestGenerateBbl:
         assert result.generated_bbl == "" and unzip(result.zip_bytes)["main.bbl"] == b"mine"
 
     def test_can_be_turned_off(self):
-        files = {"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        files = {
+            "main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"),
+            "refs.bib": BIB,
+        }
         result = clean_zip(make_zip(files), make_bbl=False)
         assert result.missing_bbl and "main.bbl" not in unzip(result.zip_bytes)
         assert any("turned off" in w for w in result.warnings)
@@ -1116,11 +1173,29 @@ class TestGenerateBbl:
     @pytest.mark.parametrize(
         "files, reason",
         [
-            ({"main.tex": doc("\\cite{alpha}\\bibliography{refs}"), "refs.bib": BIB}, "no \\bibliographystyle"),
-            ({"main.tex": doc("\\cite{alpha}\\bibliographystyle{mystery}\\bibliography{refs}"), "refs.bib": BIB}, "mystery.bst"),
+            (
+                {"main.tex": doc("\\cite{alpha}\\bibliography{refs}"), "refs.bib": BIB},
+                "no \\bibliographystyle",
+            ),
+            (
+                {
+                    "main.tex": doc("\\cite{alpha}\\bibliographystyle{mystery}\\bibliography{refs}"),
+                    "refs.bib": BIB,
+                },
+                "mystery.bst",
+            ),
             ({"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{gone}")}, "gone.bib"),
-            ({"main.tex": doc("\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}, "cites nothing"),
-            ({"main.tex": doc("\\cite{alpha}\\printbibliography", "\\addbibresource{refs.bib}"), "refs.bib": BIB}, "Biber"),
+            (
+                {"main.tex": doc("\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB},
+                "cites nothing",
+            ),
+            (
+                {
+                    "main.tex": doc("\\cite{alpha}\\printbibliography", "\\addbibresource{refs.bib}"),
+                    "refs.bib": BIB,
+                },
+                "Biber",
+            ),
         ],
     )
     def test_reasons_it_cannot_generate(self, files, reason):
@@ -1200,3 +1275,61 @@ class TestReviewVersionInCleanZip:
     def test_found_in_input_files(self):
         files = {"main.tex": doc("\\input{preamble}"), "preamble.tex": "\\linenumbers"}
         assert "line numbers" in clean_zip(make_zip(files)).review_version
+
+
+# --- Remaining edge cases -------------------------------------------------------------
+
+
+def test_encrypted_entry_without_flag(tmp_path, monkeypatch):
+    # Some tools encrypt entries without setting the flag; zipfile then raises RuntimeError.
+    def read(self, name, pwd=None):
+        raise RuntimeError("File is encrypted, password required for extraction")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", read)
+    with pytest.raises(InvalidZipError, match="password-protected"):
+        core._safe_extract(make_zip({"main.tex": doc()}), tmp_path)
+
+
+class TestGenerateBblFailures:
+    def paper(self, tree):
+        return tree(
+            {
+                "orig/main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"),
+                "orig/refs.bib": "@a{alpha, title={T}}",
+                "clean/main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"),
+            }
+        )
+
+    def test_timeout(self, tree, monkeypatch):
+        base = self.paper(tree)
+        monkeypatch.setattr(cleaner.shutil, "which", lambda name: "/usr/bin/bibtex")
+
+        def slow(cmd, **kwargs):
+            raise cleaner.subprocess.TimeoutExpired(cmd, 60)
+
+        monkeypatch.setattr(cleaner.subprocess, "run", slow)
+        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == ("BibTeX took too long", [])
+
+    @pytest.mark.parametrize(
+        "stdout, reason",
+        [
+            ("I couldn't open style file plain.bst", "the style “plain.bst” is not in the zip"),
+            ("Some other\nfatal error", "BibTeX failed: fatal error"),
+            ("", "BibTeX failed: unknown error"),
+        ],
+    )
+    def test_bibtex_errors(self, tree, monkeypatch, stdout, reason):
+        base = self.paper(tree)
+        monkeypatch.setattr(cleaner.shutil, "which", lambda name: "/usr/bin/bibtex")
+        monkeypatch.setattr(
+            cleaner.subprocess,
+            "run",
+            lambda cmd, **kwargs: cleaner.subprocess.CompletedProcess(cmd, 2, stdout, ""),
+        )
+        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == (reason, [])
+
+    def test_cyclic_inputs(self, tree):
+        base = tree({"main.tex": "\\input{a}\\cite{x}", "a.tex": "\\input{main}\\cite{y}"})
+        keys = []
+        cleaner._citations(base, base / "main.tex", keys, set())
+        assert keys == ["y", "x"]
