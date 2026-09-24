@@ -298,3 +298,10 @@ Found a bug, or a paper PaperReady doesn't handle? Please
 
 Made by **[Karthik Bharadhwaj](https://github.com/karthikbharadhwajKB)** ·
 [github.com/karthikbharadhwajKB/PaperReady](https://github.com/karthikbharadhwajKB/PaperReady)
+
+## License
+
+[MIT](LICENSE) © 2026 Karthik Bharadhwaj. PaperReady runs
+[arxiv_latex_cleaner](https://github.com/google-research/arxiv-latex-cleaner)
+(Apache 2.0) and [aclpubcheck](https://github.com/acl-org/aclpubcheck) (MIT),
+which keep their own licenses.
