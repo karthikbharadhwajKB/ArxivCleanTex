@@ -37,6 +37,17 @@ uv run streamlit run streamlit_app.py
 
 Then open the URL it prints (usually http://localhost:8501).
 
+## Run the tests
+
+```bash
+uv run pytest
+```
+
+`tests/test_cleaner.py` covers the cleaning pipeline (zip extraction, junk and
+encoding handling, main-file detection, missing-file checks and end-to-end
+cleaning); `tests/test_streamlit_app.py` drives the web UI with Streamlit's
+`AppTest`.
+
 ## Deploy it live (free)
 
 The app is designed for **Streamlit Community Cloud**, which hosts it from this
@@ -55,4 +66,5 @@ streamlit_app.py   the web UI (upload → clean → download)
 cleaner.py         the cleaning logic (unzip → arxiv_latex_cleaner → zip)
 requirements.txt   dependencies for Streamlit Community Cloud
 pyproject.toml     dependencies for local dev with uv
+tests/             pytest suite (uv run pytest)
 ```
