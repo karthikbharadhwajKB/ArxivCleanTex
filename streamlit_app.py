@@ -35,8 +35,9 @@ with st.expander("Cleaning options"):
         help="Deletes \\todo{...} together with its argument.",
     )
     commands_only = st.text_input(
-        "Commands to unwrap, keeping their text (e.g. textcolor)",
-        help="\\red{text} becomes text.",
+        "Commands to unwrap, keeping their text (e.g. hl)",
+        help="\\hl{text} becomes text. Only for one-argument commands: "
+        "\\textcolor{red}{text} would keep “red”.",
     )
     environments = st.text_input(
         "Environments to delete (e.g. note)",
