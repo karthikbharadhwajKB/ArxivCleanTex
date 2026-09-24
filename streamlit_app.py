@@ -11,43 +11,84 @@ st.set_page_config(
 )
 st.logo(str(ASSETS / "icon.svg"), size="large")
 
-ARXIV, ACL = "🧹 Prepare for arXiv", "📏 Check ACL format"
-
 MODES = {
-    ARXIV: {
-        "pitch": "#### Your LaTeX project, ready for arXiv in one click\n"
-        "Strip private comments, drop unused files and catch what would break "
-        "arXiv's build, powered by Google's "
-        "[arxiv_latex_cleaner](https://github.com/google-research/arxiv-latex-cleaner).",
+    "arxiv": {
+        "logo": ASSETS / "arxiv.svg",
+        "name": "Prepare for arXiv",
+        "summary": "Remove private comments and unused files, add the missing "
+        "bibliography.",
+        "upload": "Your LaTeX project as a .zip",
         "steps": [
-            ("📦", "1 · Upload", "Your project as a .zip, e.g. Overleaf's *Download Source*."),
-            ("🧹", "2 · Clean", "Comments, todos and unused files are removed."),
-            ("🚀", "3 · Submit", "Download the cleaned .zip and upload it to arXiv."),
+            ("📦", "Upload", "Your project as a .zip, e.g. Overleaf's *Download Source*."),
+            ("🧹", "Clean", "Comments, todos and unused files are removed."),
+            ("🚀", "Submit", "Download the cleaned .zip and upload it to arXiv."),
         ],
         "view": arxiv_view,
     },
-    ACL: {
-        "pitch": "#### Camera-ready check for ACL venues\n"
-        "Catch margin, font, page-limit and reference problems before the "
-        "publication chairs do, with the official "
-        "[aclpubcheck](https://github.com/acl-org/aclpubcheck).",
+    "acl": {
+        "logo": ASSETS / "acl.svg",
+        "name": "Check ACL format",
+        "summary": "Catch margin, font, page-limit and reference problems in "
+        "your camera-ready.",
+        "upload": "Your camera-ready PDF",
         "steps": [
-            ("📄", "1 · Upload", "The camera-ready PDF of your paper."),
-            ("📏", "2 · Check", "Page size, margins, page limit, fonts and references."),
-            ("✅", "3 · Fix", "See every problem by page, with the areas marked in red."),
+            ("📄", "Upload", "The camera-ready PDF of your paper."),
+            ("📏", "Check", "Page size, margins, page limit, fonts and references."),
+            ("✅", "Fix", "Every problem by page, marked in red."),
         ],
         "view": acl_view,
     },
 }
 
-st.title("📄 PaperReady")
-mode = st.segmented_control(
-    "What do you want to do?", list(MODES), default=ARXIV, label_visibility="collapsed"
-) or ARXIV
-st.markdown(MODES[mode]["pitch"])
+# The mode lives in the URL (?mode=acl), so each mode can be linked to directly.
+if st.query_params.get("mode") not in MODES:
+    st.query_params["mode"] = "arxiv"
+mode = st.query_params["mode"]
 
-for column, (icon, title, text) in zip(st.columns(3), MODES[mode]["steps"]):
+# --- Hero -----------------------------------------------------------------------
+
+logo_col, title_col = st.columns([1, 6], vertical_alignment="center")
+logo_col.image(str(ASSETS / "icon.svg"), width=84)
+with title_col:
+    st.title("PaperReady")
+    st.markdown("**Get your paper ready to submit**, for arXiv and ACL venues.")
+
+# --- Mode cards -----------------------------------------------------------------
+
+for column, (key, info) in zip(st.columns(2), MODES.items()):
+    selected = key == mode
     with column.container(border=True):
-        st.markdown(f"### {icon}\n**{title}**  \n{text}")
+        logo_cell, name_cell = st.columns([1, 3], vertical_alignment="center")
+        logo_cell.image(str(info["logo"]), width=64)
+        name_cell.markdown(f"#### {info['name']}")
+        st.markdown(info["summary"])
+        st.caption(f"You upload: {info['upload']}")
+        if st.button(
+            "✓ Selected" if selected else "Choose",
+            key=f"mode_{key}",
+            type="primary" if selected else "secondary",
+            width="stretch",
+        ) and not selected:
+            st.query_params["mode"] = key
+            st.rerun()
 
-MODES[mode]["view"].render()
+current = MODES[mode]
+st.caption("HOW IT WORKS")
+for column, (number, (icon, title, text)) in zip(st.columns(3), enumerate(current["steps"], 1)):
+    with column.container(border=True):
+        st.markdown(f"#### {icon}\n**{number} · {title}**  \n{text}")
+
+# The views stop the script early (e.g. while waiting for an upload), so the
+# footer's place is reserved first and filled before the view runs.
+body, footer = st.container(), st.container()
+with footer:
+    st.divider()
+    st.caption(
+        "PaperReady runs Google's "
+        "[arxiv_latex_cleaner](https://github.com/google-research/arxiv-latex-cleaner) "
+        "and ACL's [aclpubcheck](https://github.com/acl-org/aclpubcheck). "
+        "Nothing is stored: uploads are processed in a temporary folder and deleted "
+        "right away. [Source on GitHub](https://github.com/karthikbharadhwajKB/ArxivCleanTex)"
+    )
+with body:
+    current["view"].render()

@@ -223,7 +223,7 @@ paperready/arxiv.py      the arXiv pipeline (prepare → arxiv_latex_cleaner →
 paperready/acl.py        the ACL check (runs aclpubcheck, groups results, page images)
 paperready/acl_runner.py runs aclpubcheck in a separate process
 .streamlit/config.toml      the app's theme
-assets/                     the app icon (SVG, plus PNG renders)
+assets/                     icons: PaperReady (icon.svg + PNGs), arXiv mode (arxiv.svg), ACL mode (acl.svg)
 requirements.txt            Python dependencies for Streamlit Community Cloud
 packages.txt                system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
 pyproject.toml              dependencies for local development with uv
