@@ -896,6 +896,10 @@ class TestConfig:
             "--use_external_tikz", "tikz", "--svg_inkscape",
         ]
 
+    def test_config_folders_must_stay_inside_project(self):
+        with pytest.raises(InvalidOptionsError, match="use_external_tikz"):
+            cleaner._config_scalar_args({"use_external_tikz": "../../etc"}, [])
+
     def test_ui_values_take_precedence(self):
         config = {"im_size": 150, "svg_inkscape": "custom"}
         assert cleaner._config_scalar_args(config, ["--im_size", "900"]) == ["--svg_inkscape", "custom"]

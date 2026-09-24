@@ -59,7 +59,7 @@ def click_clean(at):
 TEXT_INPUTS = [
     "Main .tex file or folder (optional)",
     "Commands to delete (e.g. todo note, or \\todo \\note)",
-    "Commands to unwrap, keeping their text (e.g. textcolor)",
+    "Commands to unwrap, keeping their text (e.g. hl)",
     "Environments to delete (e.g. note)",
     "\\if commands that are not conditionals (e.g. ifdraft)",
     "Folder with externalized TikZ PDFs (optional)",

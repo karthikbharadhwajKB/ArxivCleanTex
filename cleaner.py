@@ -554,6 +554,8 @@ def _config_scalar_args(config, args):
             continue
         if kind is bool or (key == "svg_inkscape" and value is True):
             extra.append(f"--{key}")
+        elif kind is str:
+            extra += [f"--{key}", _relative_folder(str(value), f"Config “{key}”")]
         else:
             extra += [f"--{key}", str(value)]
     return extra
