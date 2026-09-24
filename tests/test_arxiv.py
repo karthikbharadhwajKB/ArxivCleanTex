@@ -5,13 +5,14 @@ import zipfile
 
 import pytest
 
-import cleaner
-from cleaner import (
+from arxivcleantex import arxiv as cleaner
+from arxivcleantex import core
+from arxivcleantex.core import InvalidZipError
+from arxivcleantex.arxiv import (
     AmbiguousMainFileError,
     CleanerOptions,
     CleaningFailedError,
     InvalidOptionsError,
-    InvalidZipError,
     MainFileNotFoundError,
     NoTexFilesError,
     build_cleaner_args,
@@ -36,65 +37,65 @@ APPLE_DOUBLE = (
 
 class TestEntryName:
     def test_plain_name_is_unchanged(self):
-        assert cleaner._entry_name(zipfile.ZipInfo("paper/main.tex")) == "paper/main.tex"
+        assert core._entry_name(zipfile.ZipInfo("paper/main.tex")) == "paper/main.tex"
 
     def test_backslashes_become_separators(self):
         info = zipfile.ZipInfo("paper\\figs\\plot.png")
-        assert cleaner._entry_name(info) == "paper/figs/plot.png"
+        assert core._entry_name(info) == "paper/figs/plot.png"
 
     def test_utf8_bytes_without_flag_are_decoded_as_utf8(self):
         info = zipfile.ZipInfo("résumé.tex".encode("utf-8").decode("cp437"))
         info.flag_bits &= ~0x800
-        assert cleaner._entry_name(info) == "résumé.tex"
+        assert core._entry_name(info) == "résumé.tex"
 
     def test_real_cp437_name_is_kept(self):
         info = zipfile.ZipInfo("\u2560.tex")  # "╠": cp437 byte 0xCC, invalid UTF-8
         info.flag_bits &= ~0x800
-        assert cleaner._entry_name(info) == "\u2560.tex"
+        assert core._entry_name(info) == "\u2560.tex"
 
     def test_name_with_utf8_flag_is_trusted(self):
         info = zipfile.ZipInfo("图.tex")
         info.flag_bits |= 0x800
-        assert cleaner._entry_name(info) == "图.tex"
+        assert core._entry_name(info) == "图.tex"
 
 
 class TestSafeExtract:
     def test_extracts_files_and_folders(self, tmp_path):
         data = make_zip({"a/b/main.tex": "x", "a/empty/": "", "top.txt": "y"})
-        cleaner._safe_extract(data, tmp_path)
+        core._safe_extract(data, tmp_path)
         assert (tmp_path / "a/b/main.tex").read_text() == "x"
         assert (tmp_path / "a/empty").is_dir()
         assert (tmp_path / "top.txt").read_text() == "y"
 
     def test_windows_backslash_paths(self, tmp_path):
-        cleaner._safe_extract(make_zip({"paper\\main.tex": "x"}), tmp_path)
+        core._safe_extract(make_zip({"paper\\main.tex": "x"}), tmp_path)
         assert (tmp_path / "paper/main.tex").is_file()
 
     def test_utf8_names_without_flag(self, tmp_path):
-        cleaner._safe_extract(make_raw_name_zip({"résumé/图.tex": "x"}), tmp_path)
+        core._safe_extract(make_raw_name_zip({"résumé/图.tex": "x"}), tmp_path)
         assert (tmp_path / "résumé/图.tex").is_file()
 
     def test_not_a_zip(self, tmp_path):
         with pytest.raises(InvalidZipError, match="not a valid .zip"):
-            cleaner._safe_extract(b"definitely not a zip", tmp_path)
+            core._safe_extract(b"definitely not a zip", tmp_path)
 
     def test_truncated_zip(self, tmp_path):
         with pytest.raises(InvalidZipError, match="not a valid .zip"):
-            cleaner._safe_extract(make_zip({"main.tex": doc()})[:40], tmp_path)
+            core._safe_extract(make_zip({"main.tex": doc()})[:40], tmp_path)
 
     @pytest.mark.parametrize("name", ["../evil.tex", "/etc/evil.tex", "a/../../evil.tex"])
     def test_rejects_paths_outside_destination(self, tmp_path, name):
         dest = tmp_path / "dest"
         dest.mkdir()
         with pytest.raises(InvalidZipError, match="Unsafe path"):
-            cleaner._safe_extract(make_zip({name: "x"}), dest)
+            core._safe_extract(make_zip({name: "x"}), dest)
 
     def test_password_protected(self, tmp_path):
         data = bytearray(make_zip({"main.tex": doc()}))
         for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
             data[data.find(signature) + offset] |= 0x1
         with pytest.raises(InvalidZipError, match="password-protected"):
-            cleaner._safe_extract(bytes(data), tmp_path)
+            core._safe_extract(bytes(data), tmp_path)
 
     def test_unsupported_compression(self, tmp_path):
         data = bytearray(make_zip({"main.tex": doc()}))
@@ -103,7 +104,7 @@ class TestSafeExtract:
         central = data.find(b"PK\x01\x02")
         data[central + 10 : central + 12] = deflate64
         with pytest.raises(InvalidZipError, match="compression method"):
-            cleaner._safe_extract(bytes(data), tmp_path)
+            core._safe_extract(bytes(data), tmp_path)
 
     def test_corrupted_entry(self, tmp_path):
         buffer = io.BytesIO()
@@ -112,7 +113,7 @@ class TestSafeExtract:
         data = bytearray(buffer.getvalue())
         data[60:70] = b"\xff" * 10
         with pytest.raises(InvalidZipError, match="corrupted"):
-            cleaner._safe_extract(bytes(data), tmp_path)
+            core._safe_extract(bytes(data), tmp_path)
 
 
 class TestRemoveJunk:
@@ -128,7 +129,7 @@ class TestRemoveJunk:
                 "figs/plot.png": "x",
             }
         )
-        cleaner._remove_junk(base)
+        core._remove_junk(base)
         remaining = sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file())
         assert remaining == ["figs/plot.png", "main.tex"]
         assert not (base / "__MACOSX").exists()
@@ -136,7 +137,7 @@ class TestRemoveJunk:
     def test_removes_symlinks(self, tree):
         base = tree({"main.tex": "x"})
         (base / "link.tex").symlink_to("/etc/passwd")
-        cleaner._remove_junk(base)
+        core._remove_junk(base)
         assert not (base / "link.tex").is_symlink()
 
 

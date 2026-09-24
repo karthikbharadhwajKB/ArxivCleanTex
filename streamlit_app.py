@@ -3,7 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from cleaner import (
+from arxivcleantex.arxiv import (
     ARXIV_SIZE_LIMIT,
     CleanerError,
     CleanerOptions,
