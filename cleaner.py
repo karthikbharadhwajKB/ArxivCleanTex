@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -35,9 +36,12 @@ CLEANER_TEXT_FILES = re.compile(r".tex$|.tikz$")
 # characters are never treated as whitespace or line breaks by the cleaner.
 _PUA_BASE = 0xF700
 _PUA_CHARS = re.compile("([\uf780-\uf7ff]+)")
-_EIGHT_BIT_INPUTENC = re.compile(
-    r"\\usepackage\s*\[[^\]]*\b(latin\d|ansinew|cp\d+|applemac|macce|decmulti|next)\b"
+# Ways a source can declare a non-UTF-8 input encoding.
+_INPUTENC = re.compile(
+    r"\\(?:usepackage|RequirePackage)\s*\[([^\]]*)\]\s*\{[^}]*\binputenc\b[^}]*\}"
+    r"|\\inputencoding\s*\{([^}]*)\}"
 )
+_OTHER_ENCODING_DECL = re.compile(r"\\begin\s*\{CJK\*?\}|\\XeTeXinputencoding")
 
 
 def _pua_errors(error):
@@ -95,21 +99,62 @@ def _is_ignored(path, base):
     return any(p in IGNORED_PARTS or p.startswith("._") for p in parts)
 
 
+def _entry_name(info):
+    """Returns the entry's path with "/" separators and properly decoded."""
+    name = info.filename
+    if not info.flag_bits & 0x800:
+        # Without the UTF-8 flag, zipfile decodes names as cp437, but macOS and
+        # the `zip` CLI write UTF-8 there anyway.
+        try:
+            name = name.encode("cp437").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    # Some Windows tools write "\\" as the separator; it is never valid in a
+    # file name on Windows, so it is always a separator.
+    return name.replace("\\", "/")
+
+
 def _safe_extract(zip_bytes, dest):
     dest_resolved = dest.resolve()
     try:
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-    except zipfile.BadZipFile:
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, OSError):
         raise InvalidZipError(
-            "The uploaded file is not a valid .zip archive. "
-            "Please re-create the zip and try again."
+            "The uploaded file is not a valid .zip archive (it may be corrupted "
+            "or incomplete). Please re-create the zip and try again."
         )
     with zf:
-        for name in zf.namelist():
+        for info in zf.infolist():
+            name = _entry_name(info)
             target = (dest / name).resolve()
             if target != dest_resolved and dest_resolved not in target.parents:
                 raise InvalidZipError(f"Unsafe path in zip: {name}")
-        zf.extractall(dest)
+            if info.flag_bits & 0x1:
+                raise InvalidZipError(
+                    "The zip is password-protected. Please upload an unencrypted zip."
+                )
+            if name.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            try:
+                data = zf.read(info)
+            except NotImplementedError:
+                raise InvalidZipError(
+                    f"“{name}” uses a compression method this app cannot read. "
+                    "Please re-create the zip with standard (Deflate) compression, "
+                    "e.g. with your system's built-in “Compress” option."
+                )
+            except RuntimeError:
+                raise InvalidZipError(
+                    "The zip is password-protected. Please upload an unencrypted zip."
+                )
+            except (zipfile.BadZipFile, EOFError, OSError, ValueError, zlib.error) as error:
+                raise InvalidZipError(
+                    f"The zip is corrupted: “{name}” could not be read ({error}). "
+                    "Please re-create the zip and try again."
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
 
 
 def _remove_junk(base):
@@ -170,6 +215,17 @@ def _restore_encodings(rel_paths, cleaned):
         out = cleaned / rel
         if out.is_file():
             out.write_bytes(_encode_back(out.read_text(encoding="utf-8")))
+
+
+def _declares_encoding(text):
+    """True if the source declares a non-UTF-8 input encoding."""
+    if _OTHER_ENCODING_DECL.search(text):
+        return True
+    for m in _INPUTENC.finditer(text):
+        options = (m.group(1) or m.group(2) or "").replace(" ", "").lower()
+        if any(o and o not in ("utf8", "utf8x", "utf-8") for o in options.split(",")):
+            return True
+    return False
 
 
 def _read_tex(path):
@@ -433,23 +489,26 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
         root = main_tex.parent
         warnings = []
 
-        for path in converted:
+        for path in (p for p in converted if root in p.parents):
             warnings.append(
                 f"“{_rel(path, src)}” was saved as UTF-16/UTF-32, which LaTeX "
                 "cannot read; it was converted to UTF-8."
             )
         in_root = [p for p in restore if root in p.parents]
+        sources = [
+            p for p in root.rglob("*") if p.suffix in (".tex", ".sty", ".cls") and p.is_file()
+        ]
         if in_root and not any(
-            _EIGHT_BIT_INPUTENC.search(_strip_comments(_read_tex(p)))
-            for p in _all_tex_files(root)
+            _declares_encoding(_strip_comments(_read_tex(p))) for p in sources
         ):
             names = ", ".join(f"“{_rel(p, src)}”" for p in in_root)
             warnings.append(
-                f"{names} is not UTF-8 (probably Latin-1/Windows-1252) and no "
-                "\\usepackage[latin1]{inputenc} was found. The original encoding "
-                "was kept, but arXiv's LaTeX assumes UTF-8, so accented "
-                "characters may fail to compile. Re-save the file as UTF-8 "
-                "or add that line to your preamble."
+                f"{names} is not valid UTF-8 and your sources do not declare an "
+                "input encoding. The original bytes were kept, but arXiv's LaTeX "
+                "assumes UTF-8, so non-ASCII characters may fail to compile. "
+                "Re-save the file as UTF-8, or declare its encoding, e.g. "
+                "\\usepackage[latin1]{inputenc} (Western European) or "
+                "\\usepackage[cp1251]{inputenc} (Cyrillic)."
             )
 
         # The cleaner treats .tex files in its input root as entry points, so it
