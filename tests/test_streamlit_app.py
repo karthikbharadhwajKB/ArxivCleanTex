@@ -308,3 +308,133 @@ def test_generated_bbl_is_announced(upload):
     checklist = next(m for m in at.markdown.values if "Bibliography compiled" in m)
     assert "✅ Bibliography compiled (`main.bbl` generated)" in checklist
     assert any("Ready for arXiv!" in m for m in at.markdown.values)
+
+
+# --- ACL mode ---------------------------------------------------------------------
+
+from arxivcleantex import acl  # noqa: E402
+from arxivcleantex.acl import AclReport, Issue  # noqa: E402
+
+ACL_MODE = "📏 Check ACL format"
+
+
+def run_acl_mode():
+    at = run_app()
+    at.button_group[0].set_value(ACL_MODE).run()
+    assert not at.exception
+    return at
+
+
+@pytest.fixture
+def fake_check(monkeypatch):
+    """Replaces aclpubcheck with a canned report and records the call."""
+    calls = []
+
+    def set_report(report):
+        def check(pdf_bytes, paper_type, check_bottom, check_references, check_names):
+            calls.append((pdf_bytes, paper_type, check_bottom, check_references, check_names))
+            return report
+
+        monkeypatch.setattr(acl, "check_pdf", check)
+        return calls
+
+    return set_report
+
+
+def test_mode_switch():
+    at = run_app()
+    assert at.button_group[0].value == "🧹 Prepare for arXiv"
+    assert at.get("file_uploader")[0].label == "Upload your LaTeX project (.zip)"
+    at.button_group[0].set_value(ACL_MODE).run()
+    assert at.get("file_uploader")[0].label == "Upload your paper (PDF)"
+    assert "Camera-ready check for ACL venues" in at.markdown.values[0]
+
+
+def test_acl_mode_defaults():
+    at = run_acl_mode()
+    assert at.button_group[1].label == "Paper type" and at.button_group[1].value == "long"
+    assert [(c.label, c.value) for c in at.checkbox] == [
+        ("Check that the bottom margin is empty", True),
+        ("Check reference links (DOIs, arXiv links)", True),
+        ("Check author names online (slow)", False),
+    ]
+    assert "camera-ready" in at.info[0].value
+    assert len(at.button) == 0
+
+
+def test_acl_options_are_passed(upload, fake_check):
+    calls = fake_check(AclReport())
+    upload(b"%PDF-1.5 paper", name="paper.pdf")
+    at = run_acl_mode()
+    at.button_group[1].set_value("short")
+    at.checkbox[0].uncheck()
+    at.checkbox[2].check()
+    at.run()
+    at.button[0].click().run()
+    assert calls == [(b"%PDF-1.5 paper", "short", False, True, True)]
+    assert at.success[0].value == "All clear! No formatting errors found."
+    assert [m.value for m in at.metric] == ["0", "0", "0"]
+
+
+def test_acl_report_rendering(upload, fake_check):
+    fake_check(
+        AclReport(
+            errors=[
+                Issue("Margins", "Text on page 2 bleeds into the left margin.", 3),
+                Issue("Fonts", "Wrong font."),
+            ],
+            warnings=[Issue("References", "Only 1 DOI.")],
+            page_images={2: _png()},
+        )
+    )
+    upload(b"%PDF-1.5", name="paper.pdf")
+    at = run_acl_mode()
+    at.button[0].click().run()
+    assert not at.exception
+    assert "Found 4 formatting errors in 2 places" in at.error[0].value
+    assert [m.value for m in at.metric] == ["4", "1", "1"]
+    labels = [e.label for e in at.expander]
+    assert "❌ Margins: 3 errors" in labels and "❌ Fonts: 1 errors" in labels
+    assert "⚠️ References: 1 warnings" in labels
+    assert "🔎 Flagged pages (1): problem areas in red" in labels
+    assert any("×3" in m for m in at.markdown.values)
+    assert not at.warning  # not a review version
+
+
+def test_acl_review_version_warning(upload, fake_check):
+    fake_check(AclReport(errors=[Issue("Margins", "x", 900)], likely_review_version=True))
+    upload(b"%PDF-1.5", name="paper.pdf")
+    at = run_acl_mode()
+    at.button[0].click().run()
+    assert "review version" in at.warning[0].value
+
+
+def test_acl_error(upload, monkeypatch):
+    def fail(*args, **kwargs):
+        raise acl.AclCheckFailedError("aclpubcheck could not check this PDF (boom).", "Traceback")
+
+    monkeypatch.setattr(acl, "check_pdf", fail)
+    upload(b"%PDF-1.5", name="paper.pdf")
+    at = run_acl_mode()
+    at.button[0].click().run()
+    assert "boom" in at.error[0].value and at.code[0].value == "Traceback"
+
+
+def test_acl_report_download():
+    report = AclReport(errors=[Issue("Margins", "m", 2)], warnings=[Issue("References", "r")])
+    from views.acl_view import report_markdown
+
+    text = report_markdown(report, "paper.pdf", "long")
+    assert "# ACL format check: paper.pdf" in text and "Long paper (9 pages)" in text
+    assert "- Margins: m (×2)" in text and "- References: r" in text
+    assert "**Passed**" in report_markdown(AclReport(), "p.pdf", "demo")
+
+
+def _png():
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (20, 20), "red").save(buffer, "PNG")
+    return buffer.getvalue()

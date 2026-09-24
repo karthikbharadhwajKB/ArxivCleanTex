@@ -5,6 +5,7 @@ description = "ArxivCleanTex — a Streamlit web app: upload your LaTeX project 
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "aclpubcheck",
     "arxiv-latex-cleaner>=1.0.11",
     "pyyaml>=6.0.3",
     "streamlit>=1.58.0",
@@ -12,6 +13,9 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+aclpubcheck = { git = "https://github.com/acl-org/aclpubcheck", rev = "237bee3a554f2d2fcda69cd0cf1edf4168e3d339" }
 
 [dependency-groups]
 dev = [

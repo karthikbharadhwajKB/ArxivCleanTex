@@ -12,6 +12,14 @@ removes files your paper doesn't use. ArxivCleanTex handles everything around
 it: messy real-world zips, the missing bibliography, and checking that the
 result will actually build on arXiv.
 
+The app has two modes, picked at the top of the page:
+
+- **🧹 Prepare for arXiv:** upload your LaTeX project, get a cleaned zip back
+  (everything below).
+- **📏 Check ACL format:** upload the camera-ready PDF of an ACL-style paper and
+  check it with [aclpubcheck](https://github.com/acl-org/aclpubcheck), the tool
+  ACL publication chairs use (see [Check ACL format](#check-acl-format)).
+
 ## Use it
 
 1. Zip your LaTeX project. On Overleaf, **Menu → Download → Source** gives you
@@ -99,6 +107,33 @@ Some notes on these options:
   overwrites single values such as `im_size` with its defaults. The app passes
   those values explicitly, so your config is applied.
 
+## Check ACL format
+
+Upload the camera-ready PDF, pick the paper type (long: 9 pages, short: 5,
+demo: 7, or other) and click **Check my paper**. aclpubcheck checks:
+
+- **Errors:** page size, text or images in the margins, the page limit for the
+  main text, and the main font.
+- **Warnings:** reference links (few ACL Anthology DOIs, too many arXiv links)
+  and, optionally, outdated author names.
+
+The app then shows:
+- **The results by category,** with repeated messages merged (e.g. "Text on page
+  4 bleeds into the left margin ×51").
+- **Each flagged page,** with the problem areas marked in red.
+- **A downloadable report** (Markdown).
+
+It also recognises a **review version**: its line numbers show up as hundreds of
+margin errors, and the app says so instead of listing them all.
+
+**Check options**, all passed to aclpubcheck:
+- **Empty bottom margin:** checks that the bottom of each page is blank, because
+  the proceedings put page numbers there. On by default.
+- **Reference links:** runs locally. On by default; aclpubcheck's own command
+  line never runs this check.
+- **Author names online:** off by default, because it sends your references to
+  the Scholarcy API and is slow.
+
 ## Which files arXiv needs
 
 arXiv compiles from the folder that holds the main `.tex`. Here is what
@@ -140,13 +175,16 @@ tells you when one of them is needed:
 uv run pytest
 ```
 
-- **`tests/test_cleaner.py`** covers the whole pipeline: zip extraction, junk
+- **`tests/test_arxiv.py`** covers the whole pipeline: zip extraction, junk
   and encoding handling, main-file detection, reference checks, every cleaner
   option, `.bbl` generation, and byte-for-byte parity with
   `arxiv_latex_cleaner`.
 - **`tests/test_streamlit_app.py`** drives the web UI with Streamlit's
   `AppTest`.
-- **Tests that need BibTeX** are skipped when it isn't installed.
+- **`tests/test_acl.py`** covers the ACL mode: grouping, review-version
+  detection, error handling and real aclpubcheck runs.
+- **Tests that need BibTeX or pdflatex** are skipped when those aren't
+  installed.
 
 ## Deploy it live (free)
 
@@ -179,12 +217,17 @@ dashboard.
 ## Project layout
 
 ```
-streamlit_app.py        the web UI (upload → options → clean → results)
-cleaner.py              the pipeline (unzip → prepare → arxiv_latex_cleaner → checks → .bbl → zip)
-.streamlit/config.toml  the app's theme
-assets/                 the app icon (SVG, plus PNG renders)
-requirements.txt        Python dependencies for Streamlit Community Cloud
-packages.txt            system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
-pyproject.toml          dependencies for local development with uv
-tests/                  pytest suite (uv run pytest)
+streamlit_app.py            the page: header, mode switch
+views/arxiv_view.py         “Prepare for arXiv”: options, cleaning, results
+views/acl_view.py           “Check ACL format”: options, check, report
+arxivcleantex/core.py       shared upload handling (safe unzip, OS-junk removal)
+arxivcleantex/arxiv.py      the arXiv pipeline (prepare → arxiv_latex_cleaner → checks → .bbl → zip)
+arxivcleantex/acl.py        the ACL check (runs aclpubcheck, groups results, page images)
+arxivcleantex/acl_runner.py runs aclpubcheck in a separate process
+.streamlit/config.toml      the app's theme
+assets/                     the app icon (SVG, plus PNG renders)
+requirements.txt            Python dependencies for Streamlit Community Cloud
+packages.txt                system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
+pyproject.toml              dependencies for local development with uv
+tests/                      pytest suite (uv run pytest)
 ```

@@ -1,3 +1,4 @@
 streamlit>=1.50
 arxiv-latex-cleaner>=1.0.11
 pyyaml>=6.0
+aclpubcheck @ git+https://github.com/acl-org/aclpubcheck@237bee3a554f2d2fcda69cd0cf1edf4168e3d339
