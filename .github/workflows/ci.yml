@@ -15,8 +15,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - name: Ruff lint
         run: uv run --only-dev ruff check .
       - name: Ruff format
@@ -33,7 +33,7 @@ jobs:
       # Every test must run in CI: skipping for a missing tool fails the build.
       PAPERREADY_REQUIRE_ALL_TESTS: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install TeX Live, BibTeX and Ghostscript
         run: |
@@ -43,7 +43,7 @@ jobs:
             texlive-latex-recommended texlive-latex-extra \
             texlive-fonts-recommended ghostscript
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
