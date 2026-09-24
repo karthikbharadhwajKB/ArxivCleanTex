@@ -236,3 +236,8 @@ packages.txt                system packages for Streamlit Community Cloud (Ghost
 pyproject.toml              dependencies for local development with uv
 tests/                      pytest suite (uv run pytest)
 ```
+
+## Author
+
+Made by **Karthik Bharadhwaj** ·
+[github.com/karthikbharadhwajKB/PaperReady](https://github.com/karthikbharadhwajKB/PaperReady)
