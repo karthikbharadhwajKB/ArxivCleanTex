@@ -56,6 +56,14 @@ _COMMENT = re.compile(r"(?<!\\)%.*")
 _INPUT = re.compile(r"\\(?:input|include|subfile)\s*\{([^}]+)\}")
 _GRAPHICS = re.compile(r"\\includegraphics\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}")
 _BIB = re.compile(r"\\(?:bibliography|addbibresource)\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}")
+# Local style/class/bibliography-style files: \usepackage{styles/mine}, etc.
+_SUPPORT = {
+    ".sty": re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}"),
+    ".cls": re.compile(r"\\documentclass\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}"),
+    ".bst": re.compile(r"\\bibliographystyle\s*\{([^}]+)\}"),
+}
+# Figure types arxiv_latex_cleaner keeps when referenced without an extension.
+_LOOSE_FIGURE_EXTS = {".png", ".jpg", ".jpeg", ".pdf"}
 _GRAPHICSPATH = re.compile(r"\\graphicspath\s*\{((?:\s*\{[^}]*\}\s*)+)\}")
 
 
@@ -406,27 +414,37 @@ def _is_file(path):
         return False
 
 
-def _exists_with_exts(root, name, exts):
-    if _is_file(root / name):
-        return True
-    return any(_is_file(root / (name + ext)) for ext in exts)
-
-
 def _is_literal(name):
     # Skip references built from macros (e.g. \input{\dir/intro}); we can't resolve them.
     return name and "\\" not in name and "#" not in name
 
 
-def find_missing_files(root, main_tex, check_bib=True):
-    """Returns (missing, uses_bib) for the paper rooted at `main_tex`.
+def _resolve(root, kind, name, graphic_dirs=("",)):
+    """Returns the file a reference points to under `root`, or None."""
+    if kind == "input":
+        candidates = [name] if PurePosixPath(name).suffix else [name + ".tex"]
+        candidates.append(name)
+    elif kind == "graphics":
+        candidates = [
+            d + name + ext for d in graphic_dirs for ext in ["", *GRAPHICS_EXTS]
+        ]
+    else:  # ".bib", ".sty", ".cls", ".bst"
+        candidates = [name, name + kind]
+    for candidate in candidates:
+        if _is_file(root / candidate):
+            return root / candidate
+    return None
 
-    `missing` lists (source file, reference) pairs for files the paper needs
-    but that do not exist. It follows \\input/\\include from the main file and
-    checks \\includegraphics and bibliography references, resolved relative to
-    `root` (the main file's folder), which is how LaTeX (and arXiv) resolve
-    them. `uses_bib` is True when a BibTeX/biblatex bibliography is used.
+
+def _scan_references(root, main_tex):
+    """Follows the paper from `main_tex` and lists what it references.
+
+    Returns (refs, uses_bib), where refs are (source file, kind, name,
+    graphic dirs) tuples and kind is "input", "graphics", ".bib", ".sty",
+    ".cls" or ".bst". Paths resolve relative to `root` (the main file's
+    folder), as in LaTeX and on arXiv.
     """
-    missing = []
+    refs = []
     uses_bib = False
     seen = set()
     graphic_dirs = [""]
@@ -445,34 +463,77 @@ def find_missing_files(root, main_tex, check_bib=True):
 
         for m in _INPUT.finditer(text):
             name = m.group(1).strip()
-            if not _is_literal(name):
-                continue
-            target = root / (name if PurePosixPath(name).suffix else name + ".tex")
-            if _is_file(target):
-                queue.append(target)
-            elif _is_file(root / name):
-                queue.append(root / name)
-            else:
-                missing.append((where, name))
+            if _is_literal(name):
+                refs.append((where, "input", name, ()))
+                target = _resolve(root, "input", name)
+                if target:
+                    queue.append(target)
 
         for m in _GRAPHICS.finditer(text):
             name = m.group(1).strip()
-            if not _is_literal(name):
-                continue
-            if not any(
-                _exists_with_exts(root / d, name, GRAPHICS_EXTS) for d in graphic_dirs
-            ):
-                missing.append((where, name))
+            if _is_literal(name):
+                refs.append((where, "graphics", name, tuple(graphic_dirs)))
 
         for m in _BIB.finditer(text):
             uses_bib = True
-            if not check_bib:
-                continue
-            for name in _split_args(m.group(1)):
-                if not _exists_with_exts(root, name, [".bib"]):
-                    missing.append((where, name))
+            refs += [(where, ".bib", n, ()) for n in _split_args(m.group(1))]
 
+        for ext, pattern in _SUPPORT.items():
+            for m in pattern.finditer(text):
+                refs += [
+                    (where, ext, n, ()) for n in _split_args(m.group(1)) if _is_literal(n)
+                ]
+
+    return refs, uses_bib
+
+
+def find_missing_files(root, main_tex, check_bib=True):
+    """Returns (missing, uses_bib) for the paper rooted at `main_tex`.
+
+    `missing` lists (source file, reference) pairs for inputs, figures and
+    (with `check_bib`) .bib files the paper needs that do not exist. Style and
+    class references are not checked: most come from the TeX distribution.
+    """
+    kinds = {"input", "graphics"} | ({".bib"} if check_bib else set())
+    refs, uses_bib = _scan_references(root, main_tex)
+    missing = [
+        (where, name)
+        for where, kind, name, dirs in refs
+        if kind in kinds and not _resolve(root, kind, name, dirs)
+    ]
     return missing, uses_bib
+
+
+def _dropped_reason(kind, name, original):
+    if kind == "graphics" and not PurePosixPath(name).suffix:
+        if original.suffix.lower() not in _LOOSE_FIGURE_EXTS:
+            return (
+                f"it is referenced without its extension; write "
+                f"“{name}{original.suffix}”"
+            )
+    if kind in _SUPPORT and "/" in name and not PurePosixPath(name).suffix:
+        return (
+            f"files in subfolders need the extension in the reference; write "
+            f"“{name}{kind}” or move the file next to the main file"
+        )
+    return (
+        "arxiv_latex_cleaner mishandles names with brackets, spaces or other "
+        "special characters and folders ending in “git”; rename it"
+    )
+
+
+def find_dropped_files(original_root, cleaned_root, main_name):
+    """Lists files the cleaned paper still references that the cleaner left
+    out although they were uploaded, as (reference, reason) pairs."""
+    refs, _ = _scan_references(cleaned_root, cleaned_root / main_name)
+    dropped = {}
+    for _, kind, name, dirs in refs:
+        if kind == ".bib" or _resolve(cleaned_root, kind, name, dirs):
+            continue
+        original = _resolve(original_root, kind, name, dirs)
+        if original and name not in dropped:
+            dropped[name] = _dropped_reason(kind, name, original)
+    return sorted(dropped.items())
 
 
 def clean_zip(zip_bytes, extra_args=None, main_hint=None):
@@ -574,20 +635,12 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
 
         _restore_encodings(restore_rel, cleaned)
 
-        # Re-check the cleaned sources: anything they still reference that is
-        # absent from the output (but was in the upload) was dropped by the
-        # cleaner, e.g. names with brackets or folders ending in "git".
-        still_missing, _ = find_missing_files(
-            cleaned, cleaned / main_tex.name, check_bib=False
-        )
-        dropped = sorted({ref for where, ref in still_missing if (where, ref) not in missing})
-        if dropped:
-            names = ", ".join(f"“{ref}”" for ref in dropped[:10])
+        # Re-check the cleaned sources: anything they still reference that was
+        # uploaded but is absent from the output was dropped by the cleaner.
+        for ref, reason in find_dropped_files(staged, cleaned, main_tex.name)[:10]:
             warnings.append(
-                f"arxiv_latex_cleaner left out {names}, which your paper still "
-                "uses. This is a known issue with file or folder names containing "
-                "brackets, spaces or other special characters. Rename them (and "
-                "their references) or add them to the cleaned zip by hand."
+                f"arxiv_latex_cleaner left out “{ref}”, which your paper still "
+                f"uses: {reason}."
             )
 
         buffer = io.BytesIO()
