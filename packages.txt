@@ -1,1 +1,3 @@
 ghostscript
+texlive-binaries
+texlive-base

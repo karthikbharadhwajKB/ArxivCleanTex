@@ -113,6 +113,8 @@ class CleanResult:
     # References the cleaner left out although they were uploaded.
     dropped_files: list = field(default_factory=list)
     missing_bbl: bool = False
+    # Name of the .bbl the app generated with BibTeX, if any.
+    generated_bbl: str = ""
 
 
 def _file_sizes(base):
@@ -716,9 +718,103 @@ def find_dropped_files(original_root, cleaned_root, main_name):
     return sorted(dropped.items())
 
 
-def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
+_CITE = re.compile(r"\\(?:no)?cite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}")
+_BIBLATEX = re.compile(r"\\(?:addbibresource|printbibliography)\b")
+
+
+def _citations(root, tex, keys, seen):
+    """Adds cited keys to `keys` in order of appearance, following \\input."""
+    if tex in seen:
+        return
+    seen.add(tex)
+    text = _strip_comments(_read_tex(tex))
+    for m in re.finditer(f"{_INPUT.pattern}|{_CITE.pattern}", text):
+        if m.group(1) is not None:
+            target = _resolve(root, "input", m.group(1).strip())
+            if target:
+                _citations(root, target, keys, seen)
+        else:
+            for key in _split_args(m.group(2)):
+                if key not in keys:
+                    keys.append(key)
+
+
+def generate_bbl(original_root, cleaned_root, main_name):
+    """Runs BibTeX on the cleaned paper and writes <main>.bbl into it.
+
+    Citations come from the cleaned sources (so ones only in removed comments
+    are left out); .bib and .bst files come from the upload. Returns
+    (problem, unknown_keys): problem is None on success, otherwise a short
+    reason; unknown_keys are citations BibTeX found in no .bib file.
+    """
+    main_tex = cleaned_root / main_name
+    text = "\n".join(
+        _strip_comments(_read_tex(p)) for p in cleaned_root.rglob("*.tex")
+    )
+    if _BIBLATEX.search(text):
+        return "biblatex needs Biber, which this app cannot run", []
+    bibtex = shutil.which("bibtex")
+    if not bibtex:
+        return "BibTeX is not installed on this server", []
+
+    refs, _ = _scan_references(cleaned_root, main_tex)
+    bib_names = [n for _, kind, n, _ in refs if kind == ".bib"]
+    styles = [n for _, kind, n, _ in refs if kind == ".bst"]
+    if not styles:
+        # Templates such as ACL's set the style inside their .sty/.cls.
+        for support in sorted(cleaned_root.rglob("*")):
+            if support.suffix in (".sty", ".cls") and support.is_file():
+                text = _strip_comments(_read_tex(support))
+                for m in _SUPPORT[".bst"].finditer(text):
+                    styles += _split_args(m.group(1))
+    if not styles:
+        return "no \\bibliographystyle was found", []
+
+    keys = []
+    _citations(cleaned_root, main_tex, keys, set())
+    if not keys:
+        return "the paper cites nothing", []
+
+    with tempfile.TemporaryDirectory() as work:
+        work = Path(work)
+        databases = []
+        for i, name in enumerate(bib_names):
+            source = _resolve(original_root, ".bib", name) or _resolve(
+                original_root, ".bib", PurePosixPath(name).name
+            )
+            if not source:
+                return f"“{name}.bib” is not in the zip", []
+            shutil.copy(source, work / f"bib{i}.bib")
+            databases.append(f"bib{i}")
+        style = styles[-1]
+        local_style = _resolve(original_root, ".bst", style)
+        if local_style:
+            shutil.copy(local_style, work / "style.bst")
+            style = "style"
+        aux = [f"\\citation{{{key}}}" for key in keys]
+        aux += [f"\\bibstyle{{{style}}}", f"\\bibdata{{{','.join(databases)}}}"]
+        (work / "paper.aux").write_text("\n".join(aux) + "\n", encoding="utf-8")
+        try:
+            run = subprocess.run(
+                [bibtex, "paper"], cwd=work, capture_output=True, text=True, timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            return "BibTeX took too long", []
+        bbl = work / "paper.bbl"
+        if run.returncode > 1 or not bbl.is_file():
+            if "couldn't open style file" in run.stdout:
+                return f"the style “{styles[-1]}.bst” is not in the zip", []
+            last = (run.stdout.strip().splitlines() or ["unknown error"])[-1]
+            return f"BibTeX failed: {last}", []
+        shutil.copy(bbl, main_tex.with_suffix(".bbl"))
+        unknown = re.findall(r'didn\'t find a database entry for "([^"]+)"', run.stdout)
+    return None, unknown
+
+
+def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, make_bbl=True):
     """Cleans an uploaded project. `extra_args` are arxiv_latex_cleaner flags
-    (see build_cleaner_args); `config_bytes` is an optional cleaner_config.yaml."""
+    (see build_cleaner_args); `config_bytes` is an optional cleaner_config.yaml;
+    `make_bbl` runs BibTeX when the paper needs a .bbl that was not uploaded."""
     extra_args = list(extra_args or [])
     config = _load_config(config_bytes) if config_bytes else None
     if config is not None:
@@ -791,14 +887,6 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
         missing, uses_bib = find_missing_files(root, main_tex, check_bib=False)
         bbl = main_tex.with_suffix(".bbl")
         missing_bbl = uses_bib and not bbl.is_file()
-        if missing_bbl:
-            warnings.append(
-                f"Your paper uses a .bib bibliography but “{bbl.name}” is not in "
-                "the zip. arXiv does not run BibTeX/Biber, so references will "
-                f"show as “?”. Compile locally (on Overleaf: Logs and output "
-                f"files → Other logs and files) and add {bbl.name} next to "
-                f"{main_tex.name}."
-            )
 
         main_rel = _rel(main_tex, src)
         root_rel = _rel(root, src) or "."
@@ -845,6 +933,31 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
 
         # Re-check the cleaned sources: anything they still reference that was
         # uploaded but is absent from the output was dropped by the cleaner.
+        generated_bbl = ""
+        if missing_bbl:
+            problem, unknown = (
+                generate_bbl(staged, cleaned, main_tex.name)
+                if make_bbl
+                else ("generating it is turned off", [])
+            )
+            if problem is None:
+                generated_bbl = bbl.name
+                missing_bbl = False
+                if unknown:
+                    warnings.append(
+                        "BibTeX found no entry for "
+                        + ", ".join(f"“{k}”" for k in unknown[:10])
+                        + "; these citations will show as “?”. Add them to your .bib."
+                    )
+            else:
+                warnings.append(
+                    f"Your paper uses a .bib bibliography but “{bbl.name}” is not "
+                    f"in the zip, and it could not be generated ({problem}). arXiv "
+                    "does not run BibTeX/Biber, so references will show as “?”. "
+                    "Compile locally (on Overleaf: Logs and output files → Other "
+                    f"logs and files) and add {bbl.name} next to {main_tex.name}."
+                )
+
         dropped = find_dropped_files(staged, cleaned, main_tex.name)
         for ref, reason in dropped[:10]:
             warnings.append(
@@ -874,4 +987,5 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
             output_files=_file_sizes(cleaned),
             dropped_files=[ref for ref, _ in dropped],
             missing_bbl=missing_bbl,
+            generated_bbl=generated_bbl,
         )

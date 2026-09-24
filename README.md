@@ -23,10 +23,12 @@ commands like `\todo{}` — powered by
      know exactly what to add before uploading to arXiv.
 3. Download the cleaned `.zip` and upload it to arXiv.
 
-> **Bibliography:** arXiv does not run BibTeX/Biber, and `.bib` files are removed
-> unless you tick *Keep .bib files*. Include the compiled `main.bbl` (named like
-> your main file) in the zip. On Overleaf it is under **Logs and output files →
-> Other logs and files**. The app warns you when it is missing.
+> **Bibliography:** arXiv does not run BibTeX/Biber and `.bib` files are removed
+> by default, so the paper needs its compiled `main.bbl`. If your zip has none,
+> the app runs BibTeX on your `.bib` and `.bst` files (citations are read from the
+> cleaned sources) and adds `main.bbl` for you. biblatex/Biber projects still need
+> the `.bbl` from your own build (on Overleaf: **Logs and output files → Other logs
+> and files**).
 
 ## Cleaning options
 
@@ -80,7 +82,7 @@ Dependencies are read from `requirements.txt` automatically.
 streamlit_app.py   the web UI (upload → clean → download)
 cleaner.py         the cleaning logic (unzip → arxiv_latex_cleaner → zip)
 requirements.txt   dependencies for Streamlit Community Cloud
-packages.txt       system packages for Streamlit Community Cloud (Ghostscript)
+packages.txt       system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
 pyproject.toml     dependencies for local dev with uv
 tests/             pytest suite (uv run pytest)
 ```

@@ -38,9 +38,11 @@ def spy_clean_zip(monkeypatch):
     calls = []
     real = cleaner.clean_zip
 
-    def spy(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
-        calls.append({"extra_args": extra_args, "main_hint": main_hint, "config": config_bytes})
-        return real(zip_bytes, extra_args, main_hint, config_bytes)
+    def spy(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, make_bbl=True):
+        calls.append(
+            {"extra_args": extra_args, "main_hint": main_hint, "config": config_bytes, "make_bbl": make_bbl}
+        )
+        return real(zip_bytes, extra_args, main_hint, config_bytes, make_bbl)
 
     monkeypatch.setattr(cleaner, "clean_zip", spy)
     return calls
@@ -69,6 +71,7 @@ CHECKBOXES = [
     "Resize images to reduce size",
     "Convert PNG images to JPG",
     "Compress PDF figures (Ghostscript)",
+    "Generate a missing .bbl with BibTeX",
     "Keep .bib files",
     "Use Inkscape-exported SVGs (\\includesvg)",
 ]
@@ -94,7 +97,7 @@ def test_upstream_defaults():
     assert widget(at.number_input, "PDF image resolution (dpi)").value == 500
     assert widget(at.number_input, "Only convert PNGs larger than (MB)").value == 0.5
     assert at.slider[0].value == 50
-    assert not any(c.value for c in at.checkbox)
+    assert [c.label for c in at.checkbox if c.value] == ["Generate a missing .bbl with BibTeX"]
 
 
 @pytest.mark.parametrize(
@@ -139,6 +142,7 @@ def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatc
     at.text_input[0].input("p2")
     for label in CHECKBOXES:
         widget(at.checkbox, label).check()
+    widget(at.checkbox, "Generate a missing .bbl with BibTeX").uncheck()
     at.run()
     widget(at.number_input, "Max image size (pixels, longest side)").set_value(800)
     widget(at.number_input, "PDF image resolution (dpi)").set_value(300)
@@ -175,6 +179,7 @@ def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatc
         ],
         "main_hint": "p2",
         "config": config,
+        "make_bbl": False,
     }
     assert any("bad*" in w.value for w in at.warning)
     assert any("comment2" in w.value for w in at.warning)
@@ -292,3 +297,14 @@ def test_what_changed_lists_files(upload):
     assert at.expander[-1].label == "📂 What changed: 1 kept, 2 removed"
     kept, removed = at.tabs[-2:]
     assert kept.label == "✅ Kept (1)" and removed.label == "🗑️ Removed (2)"
+
+
+@pytest.mark.skipif(not cleaner.shutil.which("bibtex"), reason="BibTeX not installed")
+def test_generated_bbl_is_announced(upload):
+    bib = "@article{a, author = {Ann A}, title = {T}, journal = {J}, year = {2020}}"
+    upload(make_zip({"main.tex": doc("\\cite{a}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": bib}))
+    at = click_clean(run_app())
+    assert "Generated `main.bbl` with BibTeX" in at.info[0].value
+    checklist = next(m for m in at.markdown.values if "Bibliography compiled" in m)
+    assert "✅ Bibliography compiled (`main.bbl` generated)" in checklist
+    assert any("Ready for arXiv!" in m for m in at.markdown.values)

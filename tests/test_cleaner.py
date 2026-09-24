@@ -1025,3 +1025,112 @@ class TestCleanZipOptions:
     def test_invalid_config_file(self):
         with pytest.raises(InvalidOptionsError):
             self.clean({"main.tex": doc()}, config=b"- a")
+
+
+# --- .bbl generation -------------------------------------------------------------
+
+needs_bibtex = pytest.mark.skipif(not cleaner.shutil.which("bibtex"), reason="BibTeX not installed")
+
+BIB = """
+@article{alpha, author = {Ann Alpha}, title = {First}, journal = {J}, year = {2020}}
+@article{beta, author = {Bob Beta}, title = {Second}, journal = {J}, year = {2021}}
+@article{gamma, author = {Cy Gamma}, title = {Third}, journal = {J}, year = {2022}}
+"""
+
+
+def bbl_keys(result):
+    import re
+
+    bbl = unzip(result.zip_bytes)["main.bbl"].decode()
+    return re.findall(r"\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}", bbl)
+
+
+@needs_bibtex
+class TestGenerateBbl:
+    def test_generates_bbl_in_citation_order(self):
+        files = {
+            "main.tex": doc("\\citep{beta}\\input{sec}\\bibliographystyle{unsrt}\\bibliography{refs}"),
+            "sec.tex": "\\cite[p.~2]{gamma, alpha}",
+            "refs.bib": BIB,
+        }
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "main.bbl" and not result.missing_bbl
+        assert bbl_keys(result) == ["beta", "gamma", "alpha"]
+        assert result.warnings == []
+
+    def test_only_citations_kept_after_cleaning(self):
+        files = {
+            "main.tex": doc(
+                "\\cite{alpha} % \\cite{beta}\n\\iffalse\\cite{gamma}\\fi"
+                "\\bibliographystyle{plain}\\bibliography{refs}"
+            ),
+            "refs.bib": BIB,
+        }
+        assert bbl_keys(clean_zip(make_zip(files))) == ["alpha"]
+
+    def test_nocite_star(self):
+        files = {"main.tex": doc("\\nocite{*}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        assert sorted(bbl_keys(clean_zip(make_zip(files)))) == ["alpha", "beta", "gamma"]
+
+    def test_style_set_in_sty_and_uploaded_bst(self):
+        # Like the ACL template: the .sty sets the style, the .bst is uploaded.
+        plain = cleaner.subprocess.run(["kpsewhich", "plain.bst"], capture_output=True, text=True).stdout.strip()
+        files = {
+            "main.tex": doc("\\cite{alpha}\\bibliography{refs}", "\\usepackage{venue}"),
+            "venue.sty": "\\bibliographystyle{venue_natbib}",
+            "venue_natbib.bst": open(plain).read(),
+            "refs.bib": BIB,
+        }
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "main.bbl" and bbl_keys(result) == ["alpha"]
+
+    def test_root_relative_bib_path(self):
+        files = {
+            "latex/main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{latex/refs}"),
+            "latex/refs.bib": BIB,
+        }
+        assert bbl_keys(clean_zip(make_zip(files))) == ["alpha"]
+
+    def test_unknown_keys_are_reported(self):
+        files = {"main.tex": doc("\\cite{alpha,nope}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "main.bbl"
+        assert any("“nope”" in w for w in result.warnings)
+
+    def test_existing_bbl_is_kept(self):
+        files = {
+            "main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"),
+            "refs.bib": BIB,
+            "main.bbl": "mine",
+        }
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "" and unzip(result.zip_bytes)["main.bbl"] == b"mine"
+
+    def test_can_be_turned_off(self):
+        files = {"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+        result = clean_zip(make_zip(files), make_bbl=False)
+        assert result.missing_bbl and "main.bbl" not in unzip(result.zip_bytes)
+        assert any("turned off" in w for w in result.warnings)
+
+    @pytest.mark.parametrize(
+        "files, reason",
+        [
+            ({"main.tex": doc("\\cite{alpha}\\bibliography{refs}"), "refs.bib": BIB}, "no \\bibliographystyle"),
+            ({"main.tex": doc("\\cite{alpha}\\bibliographystyle{mystery}\\bibliography{refs}"), "refs.bib": BIB}, "mystery.bst"),
+            ({"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{gone}")}, "gone.bib"),
+            ({"main.tex": doc("\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}, "cites nothing"),
+            ({"main.tex": doc("\\cite{alpha}\\printbibliography", "\\addbibresource{refs.bib}"), "refs.bib": BIB}, "Biber"),
+        ],
+    )
+    def test_reasons_it_cannot_generate(self, files, reason):
+        result = clean_zip(make_zip(files))
+        assert result.missing_bbl and result.generated_bbl == ""
+        assert any(reason in w for w in result.warnings)
+
+
+def test_bbl_generation_without_bibtex(monkeypatch):
+    real_which = cleaner.shutil.which
+    monkeypatch.setattr(cleaner.shutil, "which", lambda name: None if name == "bibtex" else real_which(name))
+    files = {"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{refs}"), "refs.bib": BIB}
+    result = clean_zip(make_zip(files))
+    assert result.missing_bbl and any("BibTeX is not installed" in w for w in result.warnings)
