@@ -1,49 +1,119 @@
 # 🧹 ArxivCleanTex
 
-A simple web app to clean your LaTeX paper for arXiv submission.
+A web app that gets your LaTeX paper ready for arXiv.
 **Upload your project as a `.zip` → get back a cleaned, submission-ready `.zip`.**
 
-It strips comments, removes unused files, and (optionally) deletes helper
-commands like `\todo{}` — powered by
+The cleaning itself is done by Google's
 [`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner).
+It strips comments, `\iffalse` blocks and helper commands like `\todo{}`, and
+removes files your paper doesn't use. ArxivCleanTex handles everything around
+it: messy real-world zips, the missing bibliography, and checking that the
+result will actually build on arXiv.
 
 ## Use it
 
-1. Zip your LaTeX project (the folder with `main.tex`, figures, `.bib`, `.sty`…).
-   - On Overleaf: **Menu → Download → Source** gives you exactly this zip.
-2. Open the app, drag the `.zip` in, click **Clean my paper**.
-   - The main file is found automatically, even inside nested folders
-     (`main.tex` is preferred; otherwise any file with `\documentclass` and
-     `\begin{document}`). Junk like `__MACOSX/` is ignored.
-   - If your zip holds several papers or the main file has another name, type
-     it in **Main .tex file or folder**: a file (`paper.tex`), a path
-     (`src/paper.tex`) or a folder (`my-paper`).
-   - Files referenced via `\input`, `\include`, `\includegraphics` or
-     `\bibliography` that are missing from the zip are listed by name, so you
-     know exactly what to add before uploading to arXiv.
-3. Download the cleaned `.zip` and upload it to arXiv.
+1. Zip your LaTeX project. On Overleaf, **Menu → Download → Source** gives you
+   exactly this zip.
+2. Open the app, drop the `.zip` in and click **Clean my paper**.
+3. Check the readiness checklist, then download the cleaned `.zip` and upload
+   it to arXiv.
 
-> **Bibliography:** arXiv does not run BibTeX/Biber and `.bib` files are removed
-> by default, so the paper needs its compiled `main.bbl`. If your zip has none,
-> the app runs BibTeX on your `.bib` and `.bst` files (citations are read from the
-> cleaned sources) and adds `main.bbl` for you. biblatex/Biber projects still need
-> the `.bbl` from your own build (on Overleaf: **Logs and output files → Other logs
-> and files**).
+Nothing is stored: each upload is processed in a temporary folder that is
+deleted right away.
+
+## What it does for you
+
+**Finds your paper in any zip**
+- The main file is found anywhere in the upload, even several folders deep.
+  `main.tex` is preferred; otherwise any file with `\documentclass` and
+  `\begin{document}`.
+- If the zip holds several papers or an unusual layout, type the main file
+  or its folder in **Main .tex file or folder**: `paper.tex`, `src/paper.tex`
+  or `my-paper`.
+- Leftover `*_arXiv` folders from an earlier run are ignored.
+
+**Copes with real-world zips**
+- Zips from macOS Finder, Windows Explorer, 7-Zip, the `zip` command and
+  Overleaf all work. `__MACOSX/`, `._*`, `.DS_Store` and `Thumbs.db` are
+  removed first.
+- Windows-style `\` paths and accented or CJK file names are read correctly.
+- `.tex` files in Latin-1, Windows-1252 or other 8-bit encodings are cleaned,
+  with their original bytes kept. UTF-16/UTF-32 files are converted to UTF-8.
+- Encrypted, corrupted or oddly compressed zips get a clear message instead of
+  a crash.
+
+**Generates the missing bibliography**
+- arXiv does not run BibTeX, and Overleaf's source download has no `.bbl`, so
+  citations would show as "?".
+- When your paper uses a `.bib` but the zip has no `.bbl`, the app runs BibTeX
+  with your own `.bib` and `.bst` and adds `main.bbl`.
+- Citations are read from the *cleaned* sources, so references that only
+  appear in removed comments don't sneak in.
+- Styles set inside a template's `.sty` are found too, as in the ACL template.
+- An uploaded `.bbl` is always kept as is.
+
+**Checks the result before you submit**
+- **Missing files:** files referenced by `\input`, `\include` or
+  `\includegraphics` that aren't in the zip are listed, with the file that
+  references each one.
+- **Dropped files:** files your paper still uses but `arxiv_latex_cleaner`
+  left out are reported, with the reason and how to fix it. Common causes:
+  figures other than png/jpg/pdf referenced without their extension, style
+  files in subfolders, or names with special characters.
+- **Other checks:** a missing `.bbl`, upper-case `.TEX` files (the cleaner
+  skips them), and outputs over arXiv's 50 MB limit.
+
+**Shows what happened**
+- **Before/after numbers:** files, total size, and how much the main `.tex`
+  shrank.
+- **A readiness checklist:** main file, missing files, dropped files,
+  bibliography and size, each with ✅ or ⚠️.
+- **A file list:** every kept and removed file, with its size.
+
+**Stays faithful to `arxiv_latex_cleaner`**
+- The app only prepares the input and adds `main.bbl` when it's missing.
+- The cleaned files are byte-for-byte what `arxiv_latex_cleaner` produces
+  from the same folder, and a test enforces this.
 
 ## Cleaning options
 
-Every [`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner)
-option is available under **Cleaning options**, with the tool's own defaults:
+Every `arxiv_latex_cleaner` option is available under **⚙️ Cleaning options**,
+with the tool's own defaults:
 
-| Group | Options |
+| Tab | Options |
 |---|---|
-| Remove content | commands to delete, commands to unwrap (keep their text), environments to delete, `\if…` exceptions |
-| Images | resize (max size), PNG → JPG (quality, size threshold), compress PDFs with Ghostscript (dpi), per-image allowlist (JSON) |
-| Other | keep `.bib`, externalized TikZ folder, Inkscape SVGs (`\includesvg`), a `cleaner_config.yaml` upload (e.g. `patterns_and_insertions`) |
+| ✂️ Remove content | commands to delete (`todo`), commands to unwrap and keep their text (`hl`), environments to delete (`note`), `\if…` commands that aren't conditionals |
+| 🖼️ Images | resize (max size), PNG → JPG (quality, size threshold), compress PDFs with Ghostscript (dpi), per-image size allowlist (JSON) |
+| 🧩 Other | generate a missing `.bbl` with BibTeX (on by default), keep `.bib` files, externalized TikZ folder, Inkscape SVGs (`\includesvg`), a `cleaner_config.yaml` upload (e.g. `patterns_and_insertions`) |
 
-Paths are relative to the folder of your main `.tex`. Options set in the UI take
-precedence over the config file. PDF compression needs Ghostscript, which
-`packages.txt` installs on Streamlit Community Cloud.
+Some notes on these options:
+- **Paths:** folders and image paths are relative to the folder of your main
+  `.tex`.
+- **Validation:** invalid names, JSON or config files are reported before
+  anything runs.
+- **Config precedence:** options set in the UI take precedence over an
+  uploaded config.
+- **Config values that actually apply:** upstream's own `--config` handling
+  overwrites single values such as `im_size` with its defaults. The app passes
+  those values explicitly, so your config is applied.
+
+## Which files arXiv needs
+
+arXiv compiles from the folder that holds the main `.tex`. Here is what
+`arxiv_latex_cleaner` does with each kind of file:
+
+| File | What happens |
+|---|---|
+| `.tex` next to the main file | always kept, and cleaned |
+| `.tex` in subfolders | kept only if `\input`/`\include`d, and cleaned |
+| `.png` `.jpg` `.jpeg` `.pdf` figures | kept only if a kept `.tex` uses them |
+| other files next to the main file (`.sty`, `.cls`, `.bst`, `.bbl`, …) | kept as they are |
+| other files in subfolders (`.eps`, `.sty`, …) | kept only if referenced **with** their extension |
+| `.aux`, `.log`, `.synctex.gz`, `.svg`, `.ps`, `.bib`, … | removed (`.bib` stays with **Keep .bib files**) |
+
+For a paper that builds on arXiv, keep custom `.sty`/`.cls`/`.bst` files next
+to the main file, and write the extension for `.eps` figures. The app warns you
+when either rule bites.
 
 ## Run it locally
 
@@ -54,35 +124,64 @@ uv run streamlit run streamlit_app.py
 
 Then open the URL it prints (usually http://localhost:8501).
 
+Two features use system tools. Without them the app still works, and it
+tells you when one of them is needed:
+
+| Feature | Needs | Debian/Ubuntu | macOS |
+|---|---|---|---|
+| Generate `.bbl` | BibTeX + standard styles | `apt install texlive-binaries texlive-base` | `brew install --cask mactex-no-gui` |
+| Compress PDF figures | Ghostscript | `apt install ghostscript` | `brew install ghostscript` |
+
 ## Run the tests
 
 ```bash
 uv run pytest
 ```
 
-`tests/test_cleaner.py` covers the cleaning pipeline (zip extraction, junk and
-encoding handling, main-file detection, missing-file checks and end-to-end
-cleaning); `tests/test_streamlit_app.py` drives the web UI with Streamlit's
-`AppTest`.
+- **`tests/test_cleaner.py`** covers the whole pipeline: zip extraction, junk
+  and encoding handling, main-file detection, reference checks, every cleaner
+  option, `.bbl` generation, and byte-for-byte parity with
+  `arxiv_latex_cleaner`.
+- **`tests/test_streamlit_app.py`** drives the web UI with Streamlit's
+  `AppTest`.
+- **Tests that need BibTeX** are skipped when it isn't installed.
 
 ## Deploy it live (free)
 
-The app is designed for **Streamlit Community Cloud**, which hosts it from this
-GitHub repo at a public URL and redeploys on every push:
+The app runs on **Streamlit Community Cloud**, which hosts it from this GitHub
+repo and redeploys on every push to `main`:
 
 1. Go to <https://share.streamlit.io> and sign in with GitHub.
 2. **Create app** → pick this repo → set the main file to `streamlit_app.py`.
 3. **Deploy.** You get a permanent `https://…streamlit.app` link to share.
 
-Dependencies are read from `requirements.txt` automatically.
+Streamlit Cloud installs Python packages from `requirements.txt` and system
+packages from `packages.txt` (Ghostscript and BibTeX). If a newly added system
+package is missing after a deploy, reboot the app from the Streamlit Cloud
+dashboard.
+
+## Limitations
+
+- **biblatex/Biber:** projects that use biblatex need the `.bbl` from your own
+  build. On Overleaf it's under **Logs and output files → Other logs and
+  files**.
+- **Natbib styles:** styles such as `plainnat` are not part of the standard
+  styles installed on the server. Include the `.bst` in your zip; templates
+  like ACL, NeurIPS and ICML already ship theirs.
+- **Unwrapping commands:** this only works for one-argument commands, because
+  `arxiv_latex_cleaner` keeps the first argument. `\textcolor{red}{text}` would
+  keep "red".
+- **Final check:** always look at arXiv's PDF preview before submitting. It's
+  the only check against arXiv's own TeX installation.
 
 ## Project layout
 
 ```
-streamlit_app.py   the web UI (upload → clean → download)
-cleaner.py         the cleaning logic (unzip → arxiv_latex_cleaner → zip)
-requirements.txt   dependencies for Streamlit Community Cloud
-packages.txt       system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
-pyproject.toml     dependencies for local dev with uv
-tests/             pytest suite (uv run pytest)
+streamlit_app.py        the web UI (upload → options → clean → results)
+cleaner.py              the pipeline (unzip → prepare → arxiv_latex_cleaner → checks → .bbl → zip)
+.streamlit/config.toml  the app's theme
+requirements.txt        Python dependencies for Streamlit Community Cloud
+packages.txt            system packages for Streamlit Community Cloud (Ghostscript, BibTeX)
+pyproject.toml          dependencies for local development with uv
+tests/                  pytest suite (uv run pytest)
 ```
