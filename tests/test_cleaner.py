@@ -13,6 +13,7 @@ from cleaner import (
     NoTexFilesError,
     clean_zip,
     find_main_tex,
+    find_dropped_files,
     find_missing_files,
     parse_commands,
 )
@@ -415,6 +416,101 @@ class TestFindMissingFiles:
         assert len(missing) == 3
 
 
+class TestResolve:
+    def test_input(self, tree):
+        base = tree({"a.tex": "", "b": "", "c.tikz": ""})
+        assert cleaner._resolve(base, "input", "a") == base / "a.tex"
+        assert cleaner._resolve(base, "input", "b") == base / "b"
+        assert cleaner._resolve(base, "input", "c.tikz") == base / "c.tikz"
+        assert cleaner._resolve(base, "input", "gone") is None
+
+    def test_graphics_with_graphicspath(self, tree):
+        base = tree({"figs/plot.pdf": ""})
+        assert cleaner._resolve(base, "graphics", "plot", ("",)) is None
+        assert cleaner._resolve(base, "graphics", "plot", ("", "figs/")) == base / "figs/plot.pdf"
+
+    @pytest.mark.parametrize("kind", [".sty", ".cls", ".bst", ".bib"])
+    def test_support_files(self, tree, kind):
+        base = tree({f"sub/x{kind}": ""})
+        assert cleaner._resolve(base, kind, "sub/x") == base / f"sub/x{kind}"
+        assert cleaner._resolve(base, kind, f"sub/x{kind}") == base / f"sub/x{kind}"
+        assert cleaner._resolve(base, kind, "x") is None
+
+
+class TestScanReferences:
+    def test_collects_every_kind(self, tree):
+        base = tree(
+            {
+                "main.tex": "\\documentclass[a4]{myclass}\\usepackage[x]{a, b}"
+                "\\RequirePackage{c}\\input{sec}\\bibliographystyle{mybst}"
+                "\\bibliography{refs}\\graphicspath{{figs/}}",
+                "sec.tex": "\\includegraphics[w]{plot}",
+            }
+        )
+        refs, uses_bib = cleaner._scan_references(base, base / "main.tex")
+        assert uses_bib
+        assert sorted((w, k, n) for w, k, n, _ in refs) == [
+            ("main.tex", ".bib", "refs"),
+            ("main.tex", ".bst", "mybst"),
+            ("main.tex", ".cls", "myclass"),
+            ("main.tex", ".sty", "a"),
+            ("main.tex", ".sty", "b"),
+            ("main.tex", ".sty", "c"),
+            ("main.tex", "input", "sec"),
+            ("sec.tex", "graphics", "plot"),
+        ]
+
+    def test_missing_ignores_system_packages(self, tree):
+        base = tree({"main.tex": doc("", "\\usepackage{amsmath}\\bibliographystyle{plain}")})
+        assert find_missing_files(base, base / "main.tex") == ([], False)
+
+
+class TestFindDroppedFiles:
+    def setup(self, tree, original, cleaned, main):
+        tree({f"orig/{k}": v for k, v in original.items()})
+        base = tree({f"clean/{k}": v for k, v in cleaned.items()})
+        return find_dropped_files(base / "orig", base / "clean", main)
+
+    def test_nothing_dropped(self, tree):
+        files = {"main.tex": doc("\\includegraphics{a}"), "a.png": ""}
+        assert self.setup(tree, files, files, "main.tex") == []
+
+    def test_figure_without_extension(self, tree):
+        main = doc("\\includegraphics{figs/d}")
+        dropped = self.setup(tree, {"main.tex": main, "figs/d.eps": ""}, {"main.tex": main}, "main.tex")
+        assert dropped == [("figs/d", "it is referenced without its extension; write “figs/d.eps”")]
+
+    @pytest.mark.parametrize(
+        "command, file",
+        [
+            ("\\usepackage{styles/s}", "styles/s.sty"),
+            ("\\bibliographystyle{bst/b}", "bst/b.bst"),
+        ],
+    )
+    def test_support_file_in_subfolder(self, tree, command, file):
+        main = doc(command)
+        dropped = self.setup(tree, {"main.tex": main, file: ""}, {"main.tex": main}, "main.tex")
+        assert len(dropped) == 1 and "subfolders need the extension" in dropped[0][1]
+
+    def test_class_in_subfolder(self, tree):
+        main = "\\documentclass{cls/mine}\\begin{document}\\end{document}"
+        dropped = self.setup(tree, {"main.tex": main, "cls/mine.cls": ""}, {"main.tex": main}, "main.tex")
+        assert dropped[0][0] == "cls/mine"
+
+    def test_special_characters(self, tree):
+        main = doc("\\input{intro (1)}")
+        dropped = self.setup(tree, {"main.tex": main, "intro (1).tex": ""}, {"main.tex": main}, "main.tex")
+        assert dropped == [("intro (1)", cleaner._dropped_reason("input", "intro (1)", None))]
+
+    def test_files_missing_from_upload_are_not_dropped(self, tree):
+        main = doc("\\includegraphics{gone}\\usepackage{styles/gone}")
+        assert self.setup(tree, {"main.tex": main}, {"main.tex": main}, "main.tex") == []
+
+    def test_bib_files_are_expected_to_be_removed(self, tree):
+        main = doc("\\bibliography{refs}")
+        assert self.setup(tree, {"main.tex": main, "refs.bib": ""}, {"main.tex": main}, "main.tex") == []
+
+
 # --- End to end -----------------------------------------------------------------
 
 
@@ -523,8 +619,35 @@ class TestCleanZip:
             "sections/intro (1).tex": "Intro",
             "digit/plot.png": "x",
         }
-        warning = " ".join(clean_zip(make_zip(files)).warnings)
-        assert "sections/intro (1)" in warning and "digit/plot" in warning
+        warnings = clean_zip(make_zip(files)).warnings
+        assert len(warnings) == 2
+        assert all("special characters" in w for w in warnings)
+        assert "digit/plot" in warnings[0] and "sections/intro (1)" in warnings[1]
+
+    def test_upstream_file_rules(self):
+        files = {
+            "main.tex": doc(
+                "\\includegraphics{figs/diagram}\\includegraphics{figs/ok.eps}",
+                "\\usepackage{amsmath,rootstyle}\\usepackage{styles/sub}"
+                "\\usepackage{styles/exact.sty}",
+            ),
+            "figs/diagram.eps": "x",
+            "figs/ok.eps": "x",
+            "rootstyle.sty": "x",
+            "styles/sub.sty": "x",
+            "styles/exact.sty": "x",
+        }
+        result = clean_zip(make_zip(files))
+        assert sorted(unzip(result.zip_bytes)) == [
+            "figs/ok.eps", "main.tex", "rootstyle.sty", "styles/exact.sty"
+        ]
+        assert result.warnings == [
+            "arxiv_latex_cleaner left out “figs/diagram”, which your paper still "
+            "uses: it is referenced without its extension; write “figs/diagram.eps”.",
+            "arxiv_latex_cleaner left out “styles/sub”, which your paper still uses: "
+            "files in subfolders need the extension in the reference; write "
+            "“styles/sub.sty” or move the file next to the main file.",
+        ]
 
     def test_intentionally_removed_files_are_not_reported(self):
         files = {"main.tex": doc("\\iffalse\\includegraphics{figs/hidden}\\fi ok"), "figs/hidden.png": "x"}
