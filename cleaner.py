@@ -11,6 +11,17 @@ from pathlib import Path, PurePosixPath
 
 DEFAULT_MAIN = "main.tex"
 
+# arXiv's upload limit (see the arxiv_latex_cleaner README).
+ARXIV_SIZE_LIMIT = 50 * 1024 * 1024
+
+# arxiv_latex_cleaner reads its input path as a zip when it ends in ".zip" and
+# erases an existing "<input>_arXiv" folder, so it always runs on a copy of the
+# main file's folder under this fixed name.
+STAGING_NAME = "paper"
+
+# arxiv_latex_cleaner pastes command names into a regex unescaped.
+_COMMAND_NAME = re.compile(r"[A-Za-z@]+")
+
 # Junk that zip tools (macOS Finder, Windows, editors) add to archives.
 IGNORED_PARTS = {"__MACOSX", ".git", ".DS_Store", "Thumbs.db"}
 JUNK_DIRS = {"__MACOSX"}
@@ -154,11 +165,9 @@ def _normalize_encodings(base):
     return restore, converted
 
 
-def _restore_encodings(paths, root, cleaned):
-    for path in paths:
-        if root not in path.parents:
-            continue
-        out = cleaned / path.relative_to(root)
+def _restore_encodings(rel_paths, cleaned):
+    for rel in rel_paths:
+        out = cleaned / rel
         if out.is_file():
             out.write_bytes(_encode_back(out.read_text(encoding="utf-8")))
 
@@ -202,7 +211,16 @@ def _match_user_path(base, query):
     return matches
 
 
+def _in_previous_output(path, base):
+    return any(p.endswith("_arXiv") for p in path.relative_to(base).parent.parts)
+
+
 def _pick_main(candidates, base, scope_desc):
+    # Ignore copies left over from an earlier arxiv_latex_cleaner run.
+    fresh = [c for c in candidates if not _in_previous_output(c, base)]
+    if fresh:
+        candidates = fresh
+
     if len(candidates) == 1:
         return candidates[0]
 
@@ -235,6 +253,13 @@ def find_main_tex(base, main_hint=None):
     """
     all_tex = _all_tex_files(base)
     if not all_tex:
+        upper = [p for p in base.rglob("*") if p.suffix.lower() == ".tex"]
+        if upper:
+            raise NoTexFilesError(
+                f"“{_rel(upper[0], base)}” has an upper-case extension. "
+                "arxiv_latex_cleaner only processes files ending in lower-case "
+                "“.tex”; please rename your files and upload again."
+            )
         raise NoTexFilesError(
             "No .tex files were found in the uploaded zip. "
             "Make sure you zipped the LaTeX source folder, not the compiled PDF."
@@ -306,11 +331,29 @@ def _split_args(raw):
     return [a.strip() for a in raw.split(",") if a.strip()]
 
 
+def parse_commands(raw):
+    """Turns user input like "\\todo, note{}" into (["todo", "note"], rejected)."""
+    valid, rejected = [], []
+    for token in raw.replace(",", " ").split():
+        name = token.lstrip("\\").rstrip("{}")
+        if _COMMAND_NAME.fullmatch(name):
+            valid.append(name)
+        else:
+            rejected.append(token)
+    return valid, rejected
+
+
+def _is_file(path):
+    try:
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def _exists_with_exts(root, name, exts):
-    candidate = root / name
-    if candidate.is_file():
+    if _is_file(root / name):
         return True
-    return any((root / (name + ext)).is_file() for ext in exts)
+    return any(_is_file(root / (name + ext)) for ext in exts)
 
 
 def _is_literal(name):
@@ -318,14 +361,17 @@ def _is_literal(name):
     return name and "\\" not in name and "#" not in name
 
 
-def find_missing_files(root, main_tex):
-    """Returns (source file, missing reference) pairs for files the paper needs.
+def find_missing_files(root, main_tex, check_bib=True):
+    """Returns (missing, uses_bib) for the paper rooted at `main_tex`.
 
-    Follows \\input/\\include from the main file and checks \\includegraphics
-    and bibliography references. Paths are resolved relative to `root`, the
-    folder of the main file, which is how LaTeX (and arXiv) resolves them.
+    `missing` lists (source file, reference) pairs for files the paper needs
+    but that do not exist. It follows \\input/\\include from the main file and
+    checks \\includegraphics and bibliography references, resolved relative to
+    `root` (the main file's folder), which is how LaTeX (and arXiv) resolve
+    them. `uses_bib` is True when a BibTeX/biblatex bibliography is used.
     """
     missing = []
+    uses_bib = False
     seen = set()
     graphic_dirs = [""]
     queue = [main_tex]
@@ -345,12 +391,10 @@ def find_missing_files(root, main_tex):
             name = m.group(1).strip()
             if not _is_literal(name):
                 continue
-            target = root / name
-            if not target.suffix:
-                target = target.with_suffix(".tex")
-            if target.is_file():
+            target = root / (name if PurePosixPath(name).suffix else name + ".tex")
+            if _is_file(target):
                 queue.append(target)
-            elif (root / name).is_file():
+            elif _is_file(root / name):
                 queue.append(root / name)
             else:
                 missing.append((where, name))
@@ -365,11 +409,14 @@ def find_missing_files(root, main_tex):
                 missing.append((where, name))
 
         for m in _BIB.finditer(text):
+            uses_bib = True
+            if not check_bib:
+                continue
             for name in _split_args(m.group(1)):
                 if not _exists_with_exts(root, name, [".bib"]):
                     missing.append((where, name))
 
-    return missing
+    return missing, uses_bib
 
 
 def clean_zip(zip_bytes, extra_args=None, main_hint=None):
@@ -418,9 +465,35 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
                 "were ignored because they are not inside the main file's folder."
             )
 
-        missing = find_missing_files(root, main_tex)
+        wrong_case = [
+            p for p in root.rglob("*") if p.suffix.lower() == ".tex" and p.suffix != ".tex"
+        ]
+        if wrong_case:
+            names = ", ".join(f"“{_rel(p, src)}”" for p in wrong_case[:5])
+            warnings.append(
+                f"{names}: arxiv_latex_cleaner only cleans files ending in "
+                "lower-case “.tex”, so comments in these files were NOT removed. "
+                "Rename them to .tex and update the references."
+            )
 
-        cmd = [sys.executable, "-m", "arxiv_latex_cleaner", str(root), *extra_args]
+        missing, uses_bib = find_missing_files(root, main_tex)
+        bbl = main_tex.with_suffix(".bbl")
+        if uses_bib and not bbl.is_file():
+            warnings.append(
+                f"Your paper uses a .bib bibliography but “{bbl.name}” is not in "
+                "the zip. arXiv does not run BibTeX/Biber, so references will "
+                f"show as “?”. Compile locally (on Overleaf: Logs and output "
+                f"files → Other logs and files) and add {bbl.name} next to "
+                f"{main_tex.name}."
+            )
+
+        main_rel = _rel(main_tex, src)
+        root_rel = _rel(root, src) or "."
+        restore_rel = [p.relative_to(root) for p in restore if root in p.parents]
+        staged = Path(tmp) / STAGING_NAME
+        shutil.move(str(root), str(staged))
+
+        cmd = [sys.executable, "-m", "arxiv_latex_cleaner", str(staged), *extra_args]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
@@ -430,7 +503,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
                 details,
             )
 
-        cleaned = root.parent / f"{root.name}_arXiv"
+        cleaned = Path(tmp) / f"{STAGING_NAME}_arXiv"
         if not cleaned.exists():
             raise CleaningFailedError("Cleaned output folder was not created.")
 
@@ -440,7 +513,23 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
                 "unusable on arXiv."
             )
 
-        _restore_encodings(restore, root, cleaned)
+        _restore_encodings(restore_rel, cleaned)
+
+        # Re-check the cleaned sources: anything they still reference that is
+        # absent from the output (but was in the upload) was dropped by the
+        # cleaner, e.g. names with brackets or folders ending in "git".
+        still_missing, _ = find_missing_files(
+            cleaned, cleaned / main_tex.name, check_bib=False
+        )
+        dropped = sorted({ref for where, ref in still_missing if (where, ref) not in missing})
+        if dropped:
+            names = ", ".join(f"“{ref}”" for ref in dropped[:10])
+            warnings.append(
+                f"arxiv_latex_cleaner left out {names}, which your paper still "
+                "uses. This is a known issue with file or folder names containing "
+                "brackets, spaces or other special characters. Rename them (and "
+                "their references) or add them to the cleaned zip by hand."
+            )
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
@@ -448,10 +537,16 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
                 if file.is_file():
                     out.write(file, file.relative_to(cleaned))
 
+        if buffer.tell() > ARXIV_SIZE_LIMIT:
+            warnings.append(
+                f"The cleaned zip is {buffer.tell() / 1024 / 1024:.0f} MB, above "
+                "arXiv's 50 MB limit. Try “Resize images” in the cleaning options."
+            )
+
         return CleanResult(
             zip_bytes=buffer.getvalue(),
-            main_file=_rel(main_tex, src),
-            project_root=_rel(root, src) or ".",
+            main_file=main_rel,
+            project_root=root_rel,
             missing_files=missing,
             warnings=warnings,
         )
