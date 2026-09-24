@@ -1,4 +1,5 @@
 import io
+import os
 import struct
 import zipfile
 
@@ -7,10 +8,13 @@ import pytest
 import cleaner
 from cleaner import (
     AmbiguousMainFileError,
+    CleanerOptions,
     CleaningFailedError,
+    InvalidOptionsError,
     InvalidZipError,
     MainFileNotFoundError,
     NoTexFilesError,
+    build_cleaner_args,
     clean_zip,
     find_main_tex,
     find_dropped_files,
@@ -711,6 +715,7 @@ UPSTREAM_PROJECT = {
     "main.tex": doc(
         "Hi % secret\n\\input{sections/intro}\\includegraphics{figs/plot}"
         "\\todo{draft}\\iffalse hidden\\fi\\begin{comment}x\\end{comment}"
+        "\\hl{kept}\\begin{note}n\\end{note}\\ifdraft d\\else e\\fi"
         "\\bibliography{refs}",
         "\\usepackage{rootstyle}",
     ),
@@ -728,7 +733,14 @@ UPSTREAM_PROJECT = {
 
 
 @pytest.mark.parametrize(
-    "extra_args", [[], ["--keep_bib"], ["--commands_to_delete", "todo"]]
+    "extra_args",
+    [
+        [],
+        ["--keep_bib"],
+        ["--commands_to_delete", "todo"],
+        ["--commands_only_to_delete", "hl", "--environments_to_delete", "note"],
+        ["--if_exceptions", "ifdraft"],
+    ],
 )
 def test_output_is_exactly_what_arxiv_latex_cleaner_produces(tmp_path, extra_args):
     """The app only prepares the input; the cleaned files must be byte-for-byte
@@ -752,3 +764,239 @@ def test_output_is_exactly_what_arxiv_latex_cleaner_produces(tmp_path, extra_arg
     for layout in ("", "nested/folder/"):
         files = {layout + name: data for name, data in UPSTREAM_PROJECT.items()}
         assert unzip(clean_zip(make_zip(files), extra_args).zip_bytes) == expected
+
+
+# --- Cleaner options --------------------------------------------------------------
+
+
+def png_bytes(width, height, noisy=False):
+    from PIL import Image
+
+    image = Image.new("RGB", (width, height), "red")
+    if noisy:
+        image.putdata([((i * 7919) % 256,) * 3 for i in range(width * height)])
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def image_size(data):
+    from PIL import Image
+
+    return Image.open(io.BytesIO(data)).size
+
+
+class TestBuildCleanerArgs:
+    def test_defaults_add_nothing(self):
+        assert build_cleaner_args(CleanerOptions()) == ([], [])
+
+    def test_every_option(self):
+        args, notes = build_cleaner_args(
+            CleanerOptions(
+                keep_bib=True,
+                resize_images=True, im_size=800,
+                compress_pdf=True, pdf_im_resolution=300,
+                images_allowlist='{"a.png": 2000, "b.pdf": 150}',
+                convert_png_to_jpg=True, png_quality=70, png_size_threshold=1.5,
+                commands_to_delete="\\todo note",
+                commands_only_to_delete="hl",
+                environments_to_delete="comment",
+                if_exceptions="\\ifdraft",
+                use_external_tikz="\\tikz\\out\\",
+                svg_inkscape=True, svg_inkscape_path="svgs/",
+            )
+        )
+        assert notes == []
+        assert args == [
+            "--keep_bib",
+            "--resize_images", "--im_size", "800",
+            "--compress_pdf", "--pdf_im_resolution", "300",
+            "--convert_png_to_jpg", "--png_quality", "70", "--png_size_threshold", "1.5",
+            "--images_allowlist", '{"a.png": 2000, "b.pdf": 150}',
+            "--commands_to_delete", "todo", "note",
+            "--commands_only_to_delete", "hl",
+            "--environments_to_delete", "comment",
+            "--if_exceptions", "ifdraft",
+            "--use_external_tikz", "tikz/out",
+            "--svg_inkscape", "svgs",
+        ]
+
+    def test_dependent_values_ignored_when_off(self):
+        options = CleanerOptions(im_size=9, pdf_im_resolution=9, png_quality=9, svg_inkscape_path="x")
+        assert build_cleaner_args(options) == ([], [])
+
+    def test_svg_inkscape_default_folder(self):
+        assert build_cleaner_args(CleanerOptions(svg_inkscape=True))[0] == ["--svg_inkscape"]
+
+    def test_invalid_names_become_notes(self):
+        args, notes = build_cleaner_args(
+            CleanerOptions(
+                commands_to_delete="todo x-y",
+                commands_only_to_delete="a*",
+                environments_to_delete="note2 note",
+                if_exceptions="draft ifok \\if-x",
+            )
+        )
+        assert args == [
+            "--commands_to_delete", "todo",
+            "--environments_to_delete", "note",
+            "--if_exceptions", "ifok",
+        ]
+        assert len(notes) == 4
+        assert "`x-y`" in notes[0] and "`a*`" in notes[1] and "`note2`" in notes[2]
+        assert "`\\if-x`" in notes[3] and "`draft`" in notes[3]
+
+    @pytest.mark.parametrize(
+        "options, message",
+        [
+            (CleanerOptions(images_allowlist="{bad"), "not valid JSON"),
+            (CleanerOptions(images_allowlist='["a.png"]'), "map image paths"),
+            (CleanerOptions(images_allowlist='{"a.png": "big"}'), "map image paths"),
+            (CleanerOptions(images_allowlist='{"a.png": true}'), "map image paths"),
+            (CleanerOptions(convert_png_to_jpg=True, png_quality=101), "between 0 and 100"),
+            (CleanerOptions(use_external_tikz="../outside"), "inside your project"),
+            (CleanerOptions(svg_inkscape=True, svg_inkscape_path="a/../../b"), "inside your project"),
+        ],
+    )
+    def test_invalid_options(self, options, message):
+        with pytest.raises(InvalidOptionsError, match=message):
+            build_cleaner_args(options)
+
+
+class TestConfig:
+    def test_empty_config(self):
+        assert cleaner._load_config(b"") == {}
+
+    def test_valid_config(self):
+        config = b"im_size: 100\npatterns_and_insertions:\n  - {pattern: a, insertion: b, description: c}\n"
+        assert cleaner._load_config(config)["im_size"] == 100
+
+    @pytest.mark.parametrize(
+        "config, message",
+        [
+            (b"key: [unclosed", "not valid YAML"),
+            (b"\xff\xfe", "not valid YAML"),
+            (b"- a\n- b", "YAML mapping"),
+            (b"patterns_and_insertions:\n  - {pattern: a, insertion: b}", "description"),
+            (b"patterns_and_insertions: nope", "description"),
+        ],
+    )
+    def test_invalid_config(self, config, message):
+        with pytest.raises(InvalidOptionsError, match=message):
+            cleaner._load_config(config)
+
+    def test_scalar_config_values_become_flags(self):
+        config = {
+            "resize_images": True, "im_size": 150, "keep_bib": False,
+            "svg_inkscape": True, "use_external_tikz": "tikz", "png_size_threshold": 0.1,
+            "commands_to_delete": ["todo"],
+        }
+        assert cleaner._config_scalar_args(config, []) == [
+            "--resize_images", "--im_size", "150", "--png_size_threshold", "0.1",
+            "--use_external_tikz", "tikz", "--svg_inkscape",
+        ]
+
+    def test_ui_values_take_precedence(self):
+        config = {"im_size": 150, "svg_inkscape": "custom"}
+        assert cleaner._config_scalar_args(config, ["--im_size", "900"]) == ["--svg_inkscape", "custom"]
+
+
+class TestCleanZipOptions:
+    def clean(self, files, config=None, **options):
+        args, _ = build_cleaner_args(CleanerOptions(**options))
+        return clean_zip(make_zip(files), args, None, config)
+
+    def body(self, result):
+        return unzip(result.zip_bytes)["main.tex"].split(b"\\begin{document}")[1]
+
+    def test_content_options(self):
+        result = self.clean(
+            {"main.tex": doc("A\\hl{kept}B\\todo{gone}C\\begin{note}secret\\end{note}D")},
+            commands_to_delete="todo", commands_only_to_delete="hl", environments_to_delete="note",
+        )
+        assert b"AkeptBCD" in self.body(result)
+
+    def test_resize_and_allowlist(self):
+        files = {
+            "main.tex": doc("\\includegraphics{a}\\includegraphics{b}"),
+            "a.png": png_bytes(1000, 800),
+            "b.png": png_bytes(1000, 800),
+        }
+        out = unzip(self.clean(files, resize_images=True, im_size=200, images_allowlist='{"b.png": 600}').zip_bytes)
+        assert image_size(out["a.png"]) == (200, 160)
+        assert image_size(out["b.png"]) == (600, 480)
+
+    def test_png_to_jpg(self):
+        files = {
+            "main.tex": doc("\\includegraphics{figs/a.png}\\includegraphics{figs/b}"),
+            "figs/a.png": png_bytes(300, 300, noisy=True),
+            "figs/b.png": png_bytes(300, 300, noisy=True),
+        }
+        result = self.clean(files, convert_png_to_jpg=True, png_size_threshold=0.0)
+        assert sorted(unzip(result.zip_bytes)) == ["figs/a.jpg", "figs/b.jpg", "main.tex"]
+        assert b"figs/a.jpg" in self.body(result)
+        assert result.warnings == []
+
+    def test_compress_pdf_needs_ghostscript(self, monkeypatch):
+        monkeypatch.setattr(cleaner.shutil, "which", lambda name: None)
+        with pytest.raises(InvalidOptionsError, match="Ghostscript"):
+            self.clean({"main.tex": doc()}, compress_pdf=True)
+
+    def test_compress_pdf_runs_with_ghostscript(self, monkeypatch, tmp_path):
+        # A stand-in `gs` that copies the input, to check the option reaches it.
+        fake_gs = tmp_path / "gs"
+        fake_gs.write_text(
+            '#!/bin/sh\nfor a; do case $a in -sOutputFile=*) out=${a#-sOutputFile=};; esac; done\n'
+            'echo compressed > "$out"\n'
+        )
+        fake_gs.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+        files = {"main.tex": doc("\\includegraphics{fig.pdf}"), "fig.pdf": "%PDF original"}
+        out = unzip(self.clean(files, compress_pdf=True, pdf_im_resolution=100).zip_bytes)
+        assert out["fig.pdf"] == b"compressed\n"
+
+    def test_external_tikz(self):
+        files = {
+            "main.tex": doc("\\tikzsetnextfilename{fig1}\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}"),
+            "tikz/fig1.pdf": "pdf",
+        }
+        result = self.clean(files, use_external_tikz="tikz")
+        assert b"\\includegraphics{tikz/fig1.pdf}" in self.body(result)
+        assert "tikz/fig1.pdf" in unzip(result.zip_bytes)
+
+    @pytest.mark.parametrize("options", [{"use_external_tikz": "nope"}, {"svg_inkscape": True}])
+    def test_missing_option_folder_warns(self, options):
+        result = self.clean({"main.tex": doc()}, **options)
+        assert any("was not found" in w for w in result.warnings)
+
+    def test_svg_inkscape(self):
+        pdf_tex = "\\put(0,0){\\includegraphics[page=1]{d_svg-tex.pdf}}"
+        files = {
+            "main.tex": doc("\\includesvg{figs/d.svg}"),
+            "figs/d.svg": "<svg/>",
+            "svg-inkscape/d_svg-tex.pdf_tex": pdf_tex,
+            "svg-inkscape/d_svg-tex.pdf": "pdf",
+        }
+        result = self.clean(files, svg_inkscape=True)
+        assert b"\\includeinkscape{svg-inkscape/d_svg-tex.pdf_tex}" in self.body(result)
+        assert sorted(unzip(result.zip_bytes)) == [
+            "main.tex", "svg-inkscape/d_svg-tex.pdf", "svg-inkscape/d_svg-tex.pdf_tex"
+        ]
+
+    def test_config_file(self):
+        config = (
+            b"im_size: 150\nresize_images: true\ncommands_to_delete: [todo]\n"
+            b"patterns_and_insertions:\n"
+            b"  - pattern: '\\\\figcomp\\{(?P<first>.*?)\\}'\n"
+            b"    insertion: '\\includegraphics{{{first}}}'\n"
+            b"    description: figcomp\n"
+        )
+        files = {"main.tex": doc("\\figcomp{a}\\todo{x}\\note{y}"), "a.png": png_bytes(1000, 800)}
+        result = self.clean(files, config=config, commands_to_delete="note")
+        body = self.body(result)
+        assert b"\\includegraphics{a}" in body and b"todo" not in body and b"note" not in body
+        assert image_size(unzip(result.zip_bytes)["a.png"]) == (150, 120)
+
+    def test_invalid_config_file(self):
+        with pytest.raises(InvalidOptionsError):
+            self.clean({"main.tex": doc()}, config=b"- a")

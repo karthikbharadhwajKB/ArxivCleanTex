@@ -28,6 +28,21 @@ commands like `\todo{}` — powered by
 > your main file) in the zip. On Overleaf it is under **Logs and output files →
 > Other logs and files**. The app warns you when it is missing.
 
+## Cleaning options
+
+Every [`arxiv_latex_cleaner`](https://github.com/google-research/arxiv-latex-cleaner)
+option is available under **Cleaning options**, with the tool's own defaults:
+
+| Group | Options |
+|---|---|
+| Remove content | commands to delete, commands to unwrap (keep their text), environments to delete, `\if…` exceptions |
+| Images | resize (max size), PNG → JPG (quality, size threshold), compress PDFs with Ghostscript (dpi), per-image allowlist (JSON) |
+| Other | keep `.bib`, externalized TikZ folder, Inkscape SVGs (`\includesvg`), a `cleaner_config.yaml` upload (e.g. `patterns_and_insertions`) |
+
+Paths are relative to the folder of your main `.tex`. Options set in the UI take
+precedence over the config file. PDF compression needs Ghostscript, which
+`packages.txt` installs on Streamlit Community Cloud.
+
 ## Run it locally
 
 ```bash
@@ -65,6 +80,7 @@ Dependencies are read from `requirements.txt` automatically.
 streamlit_app.py   the web UI (upload → clean → download)
 cleaner.py         the cleaning logic (unzip → arxiv_latex_cleaner → zip)
 requirements.txt   dependencies for Streamlit Community Cloud
+packages.txt       system packages for Streamlit Community Cloud (Ghostscript)
 pyproject.toml     dependencies for local dev with uv
 tests/             pytest suite (uv run pytest)
 ```

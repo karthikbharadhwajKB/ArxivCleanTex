@@ -21,8 +21,13 @@ class FakeUpload:
 def upload(monkeypatch):
     """Makes st.file_uploader return the given zip (AppTest cannot upload files)."""
 
-    def set_upload(data, name="paper.zip"):
-        monkeypatch.setattr(streamlit, "file_uploader", lambda *a, **k: FakeUpload(data, name))
+    def set_upload(data, name="paper.zip", config=None):
+        def file_uploader(label, *args, **kwargs):
+            if label.startswith("cleaner_config"):
+                return FakeUpload(config, "cleaner_config.yaml") if config else None
+            return FakeUpload(data, name)
+
+        monkeypatch.setattr(streamlit, "file_uploader", file_uploader)
 
     return set_upload
 
@@ -33,9 +38,9 @@ def spy_clean_zip(monkeypatch):
     calls = []
     real = cleaner.clean_zip
 
-    def spy(zip_bytes, extra_args=None, main_hint=None):
-        calls.append({"extra_args": extra_args, "main_hint": main_hint})
-        return real(zip_bytes, extra_args, main_hint)
+    def spy(zip_bytes, extra_args=None, main_hint=None, config_bytes=None):
+        calls.append({"extra_args": extra_args, "main_hint": main_hint, "config": config_bytes})
+        return real(zip_bytes, extra_args, main_hint, config_bytes)
 
     monkeypatch.setattr(cleaner, "clean_zip", spy)
     return calls
@@ -51,23 +56,69 @@ def click_clean(at):
     return at
 
 
+TEXT_INPUTS = [
+    "Main .tex file or folder (optional)",
+    "Commands to delete (e.g. todo note, or \\todo \\note)",
+    "Commands to unwrap, keeping their text (e.g. textcolor)",
+    "Environments to delete (e.g. note)",
+    "\\if commands that are not conditionals (e.g. ifdraft)",
+    "Folder with externalized TikZ PDFs (optional)",
+    "Inkscape output folder",
+]
+CHECKBOXES = [
+    "Resize images to reduce size",
+    "Convert PNG images to JPG",
+    "Compress PDF figures (Ghostscript)",
+    "Keep .bib files",
+    "Use Inkscape-exported SVGs (\\includesvg)",
+]
+
+
+def widget(elements, label):
+    return next(e for e in elements if e.label == label)
+
+
 def test_initial_page():
     at = run_app()
     assert not at.exception
     assert at.title[0].value == "🧹 ArxivCleanTex"
-    assert [t.label for t in at.text_input] == [
-        "Main .tex file or folder (optional)",
-        "Commands to delete (e.g. todo note, or \\todo \\note)",
-    ]
-    assert [c.label for c in at.checkbox] == ["Keep .bib files", "Resize images to reduce size"]
+    assert [t.label for t in at.text_input] == TEXT_INPUTS
+    assert [c.label for c in at.checkbox] == CHECKBOXES
     assert len(at.button) == 0  # no button until a zip is uploaded
 
 
-def test_image_size_only_enabled_when_resizing():
+def test_upstream_defaults():
     at = run_app()
-    assert at.number_input[0].disabled
-    at.checkbox[1].check().run()
-    assert not at.number_input[0].disabled
+    assert widget(at.number_input, "Max image size (pixels, longest side)").value == 500
+    assert widget(at.number_input, "PDF image resolution (dpi)").value == 500
+    assert widget(at.number_input, "Only convert PNGs larger than (MB)").value == 0.5
+    assert at.slider[0].value == 50
+    assert not any(c.value for c in at.checkbox)
+
+
+@pytest.mark.parametrize(
+    "checkbox, dependent",
+    [
+        ("Resize images to reduce size", ["Max image size (pixels, longest side)"]),
+        ("Convert PNG images to JPG", ["Only convert PNGs larger than (MB)", "slider"]),
+        ("Compress PDF figures (Ghostscript)", ["PDF image resolution (dpi)"]),
+        ("Use Inkscape-exported SVGs (\\includesvg)", ["Inkscape output folder"]),
+    ],
+)
+def test_dependent_inputs_enable_with_their_checkbox(checkbox, dependent):
+    def elements(at):
+        found = []
+        for label in dependent:
+            if label == "slider":
+                found.append(at.slider[0])
+            else:
+                found += [e for e in [*at.number_input, *at.text_input] if e.label == label]
+        return found
+
+    at = run_app()
+    assert all(e.disabled for e in elements(at))
+    widget(at.checkbox, checkbox).check().run()
+    assert not any(e.disabled for e in elements(at))
 
 
 def test_successful_clean(upload):
@@ -79,29 +130,62 @@ def test_successful_clean(upload):
     assert at.get("download_button")
 
 
-def test_options_are_passed_to_the_cleaner(upload, spy_clean_zip):
-    upload(make_zip({"p1/main.tex": doc(), "p2/main.tex": doc()}))
+def test_every_option_is_passed_to_the_cleaner(upload, spy_clean_zip, monkeypatch):
+    monkeypatch.setattr(cleaner.shutil, "which", lambda name: None)  # no Ghostscript
+    config = b"commands_to_delete: [draft]\n"
+    upload(make_zip({"p1/main.tex": doc(), "p2/main.tex": doc()}), config=config)
     at = run_app()
     at.text_input[0].input("p2")
-    at.checkbox[0].check()
-    at.checkbox[1].check()
+    for label in CHECKBOXES:
+        widget(at.checkbox, label).check()
     at.run()
-    at.number_input[0].set_value(800)
-    at.text_input[1].input("\\todo, note bad*")
-    click_clean(at)
+    widget(at.number_input, "Max image size (pixels, longest side)").set_value(800)
+    widget(at.number_input, "PDF image resolution (dpi)").set_value(300)
+    widget(at.number_input, "Only convert PNGs larger than (MB)").set_value(1.5)
+    at.slider[0].set_value(70)
+    at.text_area[0].input('{"figs/a.png": 2000}')
+    widget(at.text_input, TEXT_INPUTS[1]).input("\\todo, note bad*")
+    widget(at.text_input, TEXT_INPUTS[2]).input("hl")
+    widget(at.text_input, TEXT_INPUTS[3]).input("comment comment2")
+    widget(at.text_input, TEXT_INPUTS[4]).input("ifdraft")
+    widget(at.text_input, TEXT_INPUTS[5]).input("tikz")
+    widget(at.text_input, TEXT_INPUTS[6]).input("svgs")
+    at.button[0].click().run()
+    assert "Ghostscript" in at.error[0].value
+    assert spy_clean_zip[-1]["extra_args"][4:8] == [
+        "--compress_pdf", "--pdf_im_resolution", "300", "--convert_png_to_jpg"
+    ]
+
+    widget(at.checkbox, "Compress PDF figures (Ghostscript)").uncheck()
+    at.button[0].click().run()
+    assert not at.exception
     assert spy_clean_zip[-1] == {
         "extra_args": [
             "--keep_bib",
-            "--resize_images",
-            "--im_size",
-            "800",
-            "--commands_to_delete",
-            "todo",
-            "note",
+            "--resize_images", "--im_size", "800",
+            "--convert_png_to_jpg", "--png_quality", "70", "--png_size_threshold", "1.5",
+            "--images_allowlist", '{"figs/a.png": 2000}',
+            "--commands_to_delete", "todo", "note",
+            "--commands_only_to_delete", "hl",
+            "--environments_to_delete", "comment",
+            "--if_exceptions", "ifdraft",
+            "--use_external_tikz", "tikz",
+            "--svg_inkscape", "svgs",
         ],
         "main_hint": "p2",
+        "config": config,
     }
     assert any("bad*" in w.value for w in at.warning)
+    assert any("comment2" in w.value for w in at.warning)
+
+
+def test_invalid_option_shows_error(upload, spy_clean_zip):
+    upload(make_zip({"main.tex": doc()}))
+    at = run_app()
+    at.text_area[0].input("{not json")
+    at.button[0].click().run()
+    assert "not valid JSON" in at.error[0].value
+    assert spy_clean_zip == []
 
 
 def test_friendly_error(upload):
