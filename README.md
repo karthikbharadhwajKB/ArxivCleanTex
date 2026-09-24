@@ -12,6 +12,15 @@ commands like `\todo{}` — powered by
 1. Zip your LaTeX project (the folder with `main.tex`, figures, `.bib`, `.sty`…).
    - On Overleaf: **Menu → Download → Source** gives you exactly this zip.
 2. Open the app, drag the `.zip` in, click **Clean my paper**.
+   - The main file is found automatically, even inside nested folders
+     (`main.tex` is preferred; otherwise any file with `\documentclass` and
+     `\begin{document}`). Junk like `__MACOSX/` is ignored.
+   - If your zip holds several papers or the main file has another name, type
+     it in **Main .tex file or folder**: a file (`paper.tex`), a path
+     (`src/paper.tex`) or a folder (`my-paper`).
+   - Files referenced via `\input`, `\include`, `\includegraphics` or
+     `\bibliography` that are missing from the zip are listed by name, so you
+     know exactly what to add before uploading to arXiv.
 3. Download the cleaned `.zip` and upload it to arXiv.
 
 ## Run it locally
