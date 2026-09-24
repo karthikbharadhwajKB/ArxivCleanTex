@@ -412,6 +412,13 @@ def test_unknown_mode_falls_back_to_arxiv():
     assert at.get("file_uploader")[0].label == "Upload your LaTeX project (.zip)"
 
 
+def test_license_file():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "LICENSE").read_text()
+    assert text.startswith("MIT License\n\nCopyright (c) 2026 Karthik Bharadhwaj\n")
+
+
 def link_buttons(at):
     return {b.proto.label: b.proto.url for b in at.get("link_button")}
 
@@ -423,6 +430,7 @@ def test_footer_is_always_shown():
         assert "**[Karthik Bharadhwaj](https://github.com/karthikbharadhwajKB)**" in credit
         assert "(https://github.com/karthikbharadhwajKB/PaperReady)" in credit
         assert "(https://github.com/karthikbharadhwajKB/PaperReady/issues)" in credit
+        assert "[MIT License](https://github.com/karthikbharadhwajKB/PaperReady/blob/main/LICENSE)" in credit
 
 
 @pytest.mark.parametrize("mode, name", [("arxiv", "Prepare+for+arXiv"), ("acl", "Check+ACL+format")])

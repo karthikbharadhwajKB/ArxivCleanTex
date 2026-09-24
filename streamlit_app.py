@@ -102,7 +102,7 @@ with footer:
         "right away."
     )
     st.markdown(
-        f"Made by **[{feedback.AUTHOR}]({feedback.AUTHOR_URL})** · © 2026 · "
+        f"Made by **[{feedback.AUTHOR}]({feedback.AUTHOR_URL})** · © 2026 · [MIT License]({feedback.REPO_URL}/blob/main/LICENSE) · "
         f"⭐ [Source on GitHub]({feedback.REPO_URL}) · "
         f"[Report an issue]({feedback.REPO_URL}/issues)"
     )
