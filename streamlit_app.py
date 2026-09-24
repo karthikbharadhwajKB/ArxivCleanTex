@@ -1,6 +1,6 @@
 import streamlit as st
 
-from cleaner import clean_zip
+from cleaner import CleanerError, clean_zip
 
 st.set_page_config(page_title="ArxivCleanTex", page_icon="🧹")
 
@@ -11,6 +11,17 @@ st.write(
 )
 
 uploaded = st.file_uploader("Upload your LaTeX project (.zip)", type=["zip"])
+
+main_hint = st.text_input(
+    "Main .tex file or folder (optional)",
+    value="",
+    placeholder="main.tex",
+    help=(
+        "Leave empty to auto-detect (main.tex is preferred, even inside nested "
+        "folders). You can also type a file name like `paper.tex`, a path like "
+        "`src/paper.tex`, or a folder name like `my-paper`."
+    ),
+)
 
 with st.expander("Cleaning options"):
     keep_bib = st.checkbox("Keep .bib files", value=False)
@@ -37,17 +48,29 @@ if uploaded is not None and st.button("Clean my paper", type="primary"):
 
     try:
         with st.spinner("Cleaning..."):
-            cleaned = clean_zip(uploaded.getvalue(), extra)
-    except ValueError as error:
-        st.error(str(error))
+            result = clean_zip(uploaded.getvalue(), extra, main_hint)
+    except CleanerError as error:
+        st.error(str(error).replace("\n", "  \n"))
     except Exception as error:
         st.error(f"Something went wrong while cleaning: {error}")
     else:
-        st.success("Done! Your cleaned paper is ready.")
+        st.success(f"Done! Main file: `{result.main_file}`")
+        for warning in result.warnings:
+            st.warning(warning)
+        if result.missing_files:
+            lines = "\n".join(
+                f"- `{ref}` (referenced in `{source}`)"
+                for source, ref in result.missing_files
+            )
+            st.warning(
+                "These files are referenced but missing from your upload, so "
+                "arXiv will fail to compile. Add them to the zip and re-upload:"
+                f"\n\n{lines}"
+            )
         out_name = uploaded.name.rsplit(".", 1)[0] + "_cleaned.zip"
         st.download_button(
             "Download cleaned .zip",
-            data=cleaned,
+            data=result.zip_bytes,
             file_name=out_name,
             mime="application/zip",
         )
