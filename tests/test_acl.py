@@ -136,8 +136,12 @@ class TestCheckPdfRun:
             check_pdf(b"%PDF-1.5")
         assert "Traceback" in info.value.details
 
-    def test_no_text_in_pdf(self, monkeypatch):
-        stderr = "Traceback\nValueError: max() arg is an empty sequence"
+    @pytest.mark.parametrize(
+        "message",
+        ["max() arg is an empty sequence", "max() iterable argument is empty"],  # Python 3.10 / 3.12+
+    )
+    def test_no_text_in_pdf(self, monkeypatch, message):
+        stderr = f"Traceback\nValueError: {message}"
         monkeypatch.setattr(acl.subprocess, "run", FakeRun(returncode=1, stderr=stderr))
         with pytest.raises(AclCheckFailedError, match="No text could be read"):
             check_pdf(b"%PDF-1.5")
