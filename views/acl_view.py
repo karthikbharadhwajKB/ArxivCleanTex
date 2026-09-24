@@ -6,6 +6,7 @@ import streamlit as st
 
 from paperready import acl
 from paperready.core import CleanerError
+from views import feedback_view
 
 
 def report_markdown(report, file_name, paper_type):
@@ -80,9 +81,11 @@ def check(pdf_bytes, paper_type, options):
         if getattr(error, "details", ""):
             with st.expander("Technical details"):
                 st.code(error.details, language="text")
+        feedback_view.report_button(str(error))
         st.stop()
     except Exception as error:
         st.error(f"Something went wrong while checking: {error}")
+        feedback_view.report_button(f"Something went wrong while checking: {error}")
         st.stop()
     return report
 

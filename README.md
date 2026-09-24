@@ -270,6 +270,8 @@ paperready/arxiv.py          the arXiv pipeline (prepare → arxiv_latex_cleaner
 paperready/acl.py            the ACL check (runs aclpubcheck, groups results, page images)
 paperready/acl_runner.py     runs aclpubcheck in a separate process
 paperready/camera_ready.py   checks between the source and the PDF (same version, same paper)
+paperready/feedback.py       links that open a GitHub issue with the error filled in
+views/                       the app's pages: one per mode, plus the “report a problem” parts
 .streamlit/config.toml       the app's theme
 assets/                      icons: PaperReady (icon.svg + PNGs), arXiv (arxiv.svg), ACL (acl.svg)
 requirements.txt             Python dependencies for Streamlit Community Cloud
@@ -277,9 +279,22 @@ packages.txt                 system packages for Streamlit Community Cloud (Ghos
 pyproject.toml               dependencies for local development with uv
 tests/                       pytest suite (uv run pytest)
 .github/workflows/ci.yml     CI: lint and tests on every push and pull request
+.github/ISSUE_TEMPLATE/      the “Report a problem” and “Suggest a feature” forms
 ```
+
+## Reporting problems
+
+Found a bug, or a paper PaperReady doesn't handle? Please
+[open an issue](https://github.com/karthikbharadhwajKB/PaperReady/issues/new/choose).
+
+- Every error in the app has a **Report this problem** button. It opens a GitHub
+  issue with the mode, the error message and the tool versions filled in.
+- The **Report a problem** and **Suggest a feature** buttons at the bottom of the
+  page open the same forms.
+- Your files are never attached for you. If you can, attach a small example that
+  shows the problem (a cut-down .zip or PDF you're happy to make public).
 
 ## Author
 
-Made by **Karthik Bharadhwaj** ·
+Made by **[Karthik Bharadhwaj](https://github.com/karthikbharadhwajKB)** ·
 [github.com/karthikbharadhwajKB/PaperReady](https://github.com/karthikbharadhwajKB/PaperReady)
