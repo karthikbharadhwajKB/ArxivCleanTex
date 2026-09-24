@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-from arxivcleantex import acl
-from arxivcleantex.acl import (
+from paperready import acl
+from paperready.acl import (
     AclCheckFailedError,
     AclCheckUnavailableError,
     AclReport,

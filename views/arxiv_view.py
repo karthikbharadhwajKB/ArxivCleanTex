@@ -4,8 +4,8 @@ import time
 
 import streamlit as st
 
-from arxivcleantex import arxiv
-from arxivcleantex.arxiv import ARXIV_SIZE_LIMIT, CleanerError, CleanerOptions
+from paperready import arxiv
+from paperready.arxiv import ARXIV_SIZE_LIMIT, CleanerError, CleanerOptions
 
 
 def human_size(num_bytes):

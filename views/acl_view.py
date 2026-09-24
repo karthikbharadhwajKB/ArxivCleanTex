@@ -4,8 +4,8 @@ import time
 
 import streamlit as st
 
-from arxivcleantex import acl
-from arxivcleantex.core import CleanerError
+from paperready import acl
+from paperready.core import CleanerError
 
 
 def report_markdown(report, file_name, paper_type):

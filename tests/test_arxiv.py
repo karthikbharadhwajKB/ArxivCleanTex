@@ -5,10 +5,10 @@ import zipfile
 
 import pytest
 
-from arxivcleantex import arxiv as cleaner
-from arxivcleantex import core
-from arxivcleantex.core import InvalidZipError
-from arxivcleantex.arxiv import (
+from paperready import arxiv as cleaner
+from paperready import core
+from paperready.core import InvalidZipError
+from paperready.arxiv import (
     AmbiguousMainFileError,
     CleanerOptions,
     CleaningFailedError,
@@ -167,7 +167,7 @@ class TestEncodings:
 
     def test_encode_back_handles_every_high_byte(self):
         data = bytes(range(0x80, 0x100)) + "é".encode("utf-8")
-        text = data.decode("utf-8", errors="arxivcleantex_pua")
+        text = data.decode("utf-8", errors="paperready_pua")
         assert cleaner._encode_back(text) == data
 
     @pytest.mark.parametrize("codec", ["utf-16", "utf-32"])

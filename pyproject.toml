@@ -1,7 +1,7 @@
 [project]
-name = "arxivcleantex"
+name = "paperready"
 version = "0.1.0"
-description = "ArxivCleanTex — a Streamlit web app: upload your LaTeX project as a .zip and download a cleaned, arXiv-ready .zip."
+description = "PaperReady: get your LaTeX paper ready for arXiv and check ACL camera-ready formatting."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
