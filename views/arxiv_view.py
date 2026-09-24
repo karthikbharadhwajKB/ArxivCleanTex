@@ -142,8 +142,9 @@ def cleaning_options():
 def clean(zip_bytes, main_hint, options, make_bbl, config):
     """Runs the cleaner with a live status; shows errors and stops on failure."""
     started = time.monotonic()
+    status = st.status("Cleaning your paper…", expanded=True)
     try:
-        with st.status("Cleaning your paper…", expanded=True) as status:
+        with status:
             st.write("📦 Unpacking and finding your main .tex…")
             extra, notes = arxiv.build_cleaner_args(options)
             for note in notes:
@@ -157,6 +158,7 @@ def clean(zip_bytes, main_hint, options, make_bbl, config):
                 expanded=False,
             )
     except CleanerError as error:
+        status.update(label="Could not clean your paper", state="error", expanded=False)
         st.error(str(error).replace("\n", "  \n"))
         if getattr(error, "details", ""):
             with st.expander("Technical details"):
@@ -164,6 +166,7 @@ def clean(zip_bytes, main_hint, options, make_bbl, config):
         feedback_view.report_button(str(error))
         st.stop()
     except Exception as error:
+        status.update(label="Could not clean your paper", state="error", expanded=False)
         st.error(f"Something went wrong while cleaning: {error}")
         feedback_view.report_button(f"Something went wrong while cleaning: {error}")
         st.stop()
