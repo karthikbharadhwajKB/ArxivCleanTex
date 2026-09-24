@@ -230,6 +230,7 @@ def test_friendly_error(upload):
     at = click_clean(run_app())
     assert "No .tex files" in at.error[0].value
     assert not at.success
+    assert status_box(at) == ("Could not clean your paper", ":material/error:")
     report = link_buttons(at)["Report this problem"]
     assert "title=%5BBug%5D+No+.tex+files" in report and "error=No+.tex+files" in report
 
@@ -261,6 +262,7 @@ def test_unexpected_error(upload, monkeypatch):
     at = click_clean(run_app())
     assert at.error[0].value == "Something went wrong while cleaning: disk full"
     assert "error=Something+went+wrong+while+cleaning%3A+disk+full" in link_buttons(at)["Report this problem"]
+    assert status_box(at) == ("Could not clean your paper", ":material/error:")
 
 
 def test_warnings_and_missing_files(upload):
@@ -419,6 +421,11 @@ def test_license_file():
     assert text.startswith("MIT License\n\nCopyright (c) 2026 Karthik Bharadhwaj\n")
 
 
+def status_box(at):
+    (status,) = at.get("status")
+    return status.label, status.icon
+
+
 def link_buttons(at):
     return {b.proto.label: b.proto.url for b in at.get("link_button")}
 
@@ -515,6 +522,7 @@ def test_acl_error(upload, monkeypatch):
     assert "boom" in at.error[0].value and at.code[0].value == "Traceback"
     report = link_buttons(at)["Report this problem"]
     assert "mode=Check+ACL+format" in report and "Traceback" not in report
+    assert status_box(at) == ("Could not check your paper", ":material/error:")
 
 
 def test_acl_report_download():
@@ -555,6 +563,15 @@ def test_acl_unexpected_error(upload, monkeypatch):
     button(at, "Check my paper").click().run()
     assert at.error[0].value == "Something went wrong while checking: disk full"
     assert "error=Something+went+wrong+while+checking%3A+disk+full" in link_buttons(at)["Report this problem"]
+    assert status_box(at) == ("Could not check your paper", ":material/error:")
+
+
+def test_status_box_after_success(upload):
+    upload(make_zip({"main.tex": doc()}))
+    at = click_clean(run_app())
+    label, icon = status_box(at)
+    assert label.startswith("Cleaned in ") and label.endswith(" s")
+    assert icon != ":material/error:"
 
 
 @pytest.mark.parametrize(

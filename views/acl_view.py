@@ -61,8 +61,9 @@ def check_options():
 def check(pdf_bytes, paper_type, options):
     """Runs aclpubcheck with a live status; shows errors and stops on failure."""
     started = time.monotonic()
+    status = st.status("Checking your paper…", expanded=True)
     try:
-        with st.status("Checking your paper…", expanded=True) as status:
+        with status:
             st.write("📏 Running aclpubcheck: page size, margins, page limit, fonts…")
             report = acl.check_pdf(
                 pdf_bytes,
@@ -77,6 +78,7 @@ def check(pdf_bytes, paper_type, options):
                 expanded=False,
             )
     except CleanerError as error:
+        status.update(label="Could not check your paper", state="error", expanded=False)
         st.error(str(error))
         if getattr(error, "details", ""):
             with st.expander("Technical details"):
@@ -84,6 +86,7 @@ def check(pdf_bytes, paper_type, options):
         feedback_view.report_button(str(error))
         st.stop()
     except Exception as error:
+        status.update(label="Could not check your paper", state="error", expanded=False)
         st.error(f"Something went wrong while checking: {error}")
         feedback_view.report_button(f"Something went wrong while checking: {error}")
         st.stop()
