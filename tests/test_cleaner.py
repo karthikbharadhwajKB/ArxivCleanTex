@@ -537,6 +537,20 @@ class TestCleanZip:
         assert (result.main_file, result.project_root) == ("main.tex", ".")
         assert result.missing_files == [] and result.warnings == []
 
+    def test_result_details(self):
+        files = {
+            "paper/main.tex": doc("\\includegraphics{figs/d}\\bibliography{refs}"),
+            "paper/figs/d.eps": "eps",
+            "paper/refs.bib": "@a{}",
+            "paper/main.aux": "aux",
+        }
+        result = clean_zip(make_zip(files))
+        assert sorted(result.input_files) == ["figs/d.eps", "main.aux", "main.tex", "refs.bib"]
+        assert list(result.output_files) == ["main.tex"]
+        assert result.input_files["figs/d.eps"] == 3
+        assert result.dropped_files == ["figs/d"]
+        assert result.missing_bbl
+
     def test_nested_project_is_flattened(self):
         result = clean_zip(make_zip({"a/b/paper/main.tex": doc(), "a/README.md": "x"}))
         assert list(unzip(result.zip_bytes)) == ["main.tex"]

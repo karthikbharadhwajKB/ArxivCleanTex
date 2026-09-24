@@ -85,6 +85,7 @@ def test_initial_page():
     assert [t.label for t in at.text_input] == TEXT_INPUTS
     assert [c.label for c in at.checkbox] == CHECKBOXES
     assert len(at.button) == 0  # no button until a zip is uploaded
+    assert "Drop your project's .zip" in at.info[0].value
 
 
 def test_upstream_defaults():
@@ -251,3 +252,43 @@ def test_download_contains_cleaned_zip(upload, monkeypatch):
     click_clean(run_app())
     assert captured["file_name"] == "my paper_cleaned.zip"
     assert b"secret" not in unzip(captured["data"])["main.tex"]
+
+
+def test_results_dashboard_when_ready(upload):
+    upload(
+        make_zip(
+            {
+                "paper/main.tex": doc("Hi % a long private comment\n\\bibliography{refs}"),
+                "paper/main.bbl": "bbl",
+                "paper/refs.bib": "@a{}",
+                "paper/main.log": "log",
+            }
+        )
+    )
+    at = click_clean(run_app())
+    files, size, main = at.metric
+    assert (files.label, files.value, files.delta) == ("Files", "2", "-2 files")
+    assert size.label == "Size" and size.delta.startswith("-")
+    assert main.label == "main.tex" and "comments & drafts" in main.delta
+    assert any("Ready for arXiv!" in m for m in at.markdown.values)
+    assert not any("⚠️" in m for m in at.markdown.values)
+    assert at.status[0].label.startswith("Cleaned in")
+
+
+def test_results_dashboard_lists_problems(upload):
+    upload(make_zip({"main.tex": doc("\\includegraphics{gone}\\includegraphics{figs/d}\\bibliography{refs}"), "figs/d.eps": "x"}))
+    at = click_clean(run_app())
+    checklist = next(m for m in at.markdown.values if "Every referenced file" in m)
+    assert "⚠️ Every referenced file is in the upload" in checklist
+    assert "⚠️ Nothing your paper uses was dropped" in checklist
+    assert "⚠️ Bibliography compiled" in checklist
+    assert "✅ Under arXiv's 50 MB limit" in checklist
+    assert any("Almost there" in m for m in at.markdown.values)
+
+
+def test_what_changed_lists_files(upload):
+    upload(make_zip({"main.tex": doc(), "unused.png": "x", "main.aux": "x"}))
+    at = click_clean(run_app())
+    assert at.expander[-1].label == "📂 What changed: 1 kept, 2 removed"
+    kept, removed = at.tabs[-2:]
+    assert kept.label == "✅ Kept (1)" and removed.label == "🗑️ Removed (2)"
