@@ -3,6 +3,7 @@ name = "paperready"
 version = "0.1.0"
 description = "PaperReady: get your LaTeX paper ready for arXiv and check ACL camera-ready formatting."
 readme = "README.md"
+authors = [{ name = "Karthik Bharadhwaj" }]
 requires-python = ">=3.10"
 dependencies = [
     "aclpubcheck",

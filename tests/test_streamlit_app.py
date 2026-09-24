@@ -379,6 +379,9 @@ def test_unknown_mode_falls_back_to_arxiv():
 def test_footer_is_always_shown():
     for at in (run_app(), run_acl_mode()):
         assert any("Nothing is stored" in c for c in at.caption.values)
+        credit = next(m for m in at.markdown.values if "Made by" in m)
+        assert "**Karthik Bharadhwaj**" in credit
+        assert "(https://github.com/karthikbharadhwajKB/PaperReady)" in credit
 
 
 def test_acl_mode_defaults():

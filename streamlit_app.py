@@ -88,7 +88,11 @@ with footer:
         "[arxiv_latex_cleaner](https://github.com/google-research/arxiv-latex-cleaner) "
         "and ACL's [aclpubcheck](https://github.com/acl-org/aclpubcheck). "
         "Nothing is stored: uploads are processed in a temporary folder and deleted "
-        "right away. [Source on GitHub](https://github.com/karthikbharadhwajKB/PaperReady)"
+        "right away."
+    )
+    st.markdown(
+        "Made by **Karthik Bharadhwaj** · "
+        "[github.com/karthikbharadhwajKB/PaperReady](https://github.com/karthikbharadhwajKB/PaperReady)"
     )
 with body:
     current["view"].render()
