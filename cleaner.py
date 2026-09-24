@@ -1,5 +1,7 @@
+import codecs
 import io
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,27 @@ DEFAULT_MAIN = "main.tex"
 
 # Junk that zip tools (macOS Finder, Windows, editors) add to archives.
 IGNORED_PARTS = {"__MACOSX", ".git", ".DS_Store", "Thumbs.db"}
+JUNK_DIRS = {"__MACOSX"}
+JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+# Files arxiv_latex_cleaner reads as (strict UTF-8) text; mirrors its own patterns.
+CLEANER_TEXT_FILES = re.compile(r".tex$|.tikz$")
+
+# Bytes that are not valid UTF-8 are mapped one-to-one onto this private-use
+# range while the cleaner runs, then restored. Unlike a Latin-1 round trip, these
+# characters are never treated as whitespace or line breaks by the cleaner.
+_PUA_BASE = 0xF700
+_PUA_CHARS = re.compile("([\uf780-\uf7ff]+)")
+_EIGHT_BIT_INPUTENC = re.compile(
+    r"\\usepackage\s*\[[^\]]*\b(latin\d|ansinew|cp\d+|applemac|macce|decmulti|next)\b"
+)
+
+
+def _pua_errors(error):
+    return chr(_PUA_BASE + error.object[error.start]), error.start + 1
+
+
+codecs.register_error("arxivcleantex_pua", _pua_errors)
 
 GRAPHICS_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".eps", ".ps", ".svg", ".tikz"]
 
@@ -42,7 +65,9 @@ class AmbiguousMainFileError(CleanerError):
 
 
 class CleaningFailedError(CleanerError):
-    pass
+    def __init__(self, message, details=""):
+        super().__init__(message)
+        self.details = details
 
 
 @dataclass
@@ -74,6 +99,68 @@ def _safe_extract(zip_bytes, dest):
             if target != dest_resolved and dest_resolved not in target.parents:
                 raise InvalidZipError(f"Unsafe path in zip: {name}")
         zf.extractall(dest)
+
+
+def _remove_junk(base):
+    """Deletes OS metadata (e.g. macOS `__MACOSX/._main.tex`) that is not text."""
+    for path in sorted(base.rglob("*"), reverse=True):
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir() and path.name in JUNK_DIRS:
+            shutil.rmtree(path)
+        elif path.is_file() and (
+            path.name in JUNK_FILES or path.name.startswith("._")
+        ):
+            path.unlink()
+
+
+def _encode_back(text):
+    out = bytearray()
+    for chunk in _PUA_CHARS.split(text):
+        if chunk and _PUA_CHARS.fullmatch(chunk):
+            out += bytes(ord(c) - _PUA_BASE for c in chunk)
+        else:
+            out += chunk.encode("utf-8")
+    return bytes(out)
+
+
+def _normalize_encodings(base):
+    """Makes every file the cleaner reads valid UTF-8.
+
+    Returns (restore, converted): `restore` lists files in an 8-bit encoding
+    (Latin-1, Windows-1252, ...) whose original bytes must be put back after
+    cleaning; `converted` lists UTF-16/32 files that were re-saved as UTF-8,
+    since LaTeX cannot read those anyway.
+    """
+    restore, converted = [], []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file() or not CLEANER_TEXT_FILES.search(path.name):
+            continue
+        data = path.read_bytes()
+        if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+            path.write_text(data.decode("utf-32"), encoding="utf-8")
+            converted.append(path)
+            continue
+        if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            path.write_text(data.decode("utf-16"), encoding="utf-8")
+            converted.append(path)
+            continue
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("utf-8", errors="arxivcleantex_pua")
+            path.write_bytes(text.encode("utf-8"))
+            restore.append(path)
+    return restore, converted
+
+
+def _restore_encodings(paths, root, cleaned):
+    for path in paths:
+        if root not in path.parents:
+            continue
+        out = cleaned / path.relative_to(root)
+        if out.is_file():
+            out.write_bytes(_encode_back(out.read_text(encoding="utf-8")))
 
 
 def _read_tex(path):
@@ -293,9 +380,30 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
         src.mkdir()
 
         _safe_extract(zip_bytes, src)
+        _remove_junk(src)
+        restore, converted = _normalize_encodings(src)
         main_tex = find_main_tex(src, main_hint)
         root = main_tex.parent
         warnings = []
+
+        for path in converted:
+            warnings.append(
+                f"“{_rel(path, src)}” was saved as UTF-16/UTF-32, which LaTeX "
+                "cannot read; it was converted to UTF-8."
+            )
+        in_root = [p for p in restore if root in p.parents]
+        if in_root and not any(
+            _EIGHT_BIT_INPUTENC.search(_strip_comments(_read_tex(p)))
+            for p in _all_tex_files(root)
+        ):
+            names = ", ".join(f"“{_rel(p, src)}”" for p in in_root)
+            warnings.append(
+                f"{names} is not UTF-8 (probably Latin-1/Windows-1252) and no "
+                "\\usepackage[latin1]{inputenc} was found. The original encoding "
+                "was kept, but arXiv's LaTeX assumes UTF-8, so accented "
+                "characters may fail to compile. Re-save the file as UTF-8 "
+                "or add that line to your preamble."
+            )
 
         # The cleaner treats .tex files in its input root as entry points, so it
         # must run on the folder that holds the main file.
@@ -315,8 +423,12 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
         cmd = [sys.executable, "-m", "arxiv_latex_cleaner", str(root), *extra_args]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            message = (result.stderr or result.stdout or "").strip()
-            raise CleaningFailedError(f"arxiv_latex_cleaner failed:\n{message}")
+            details = (result.stderr or result.stdout or "").strip()
+            last_line = details.splitlines()[-1] if details else "unknown error"
+            raise CleaningFailedError(
+                f"arxiv_latex_cleaner could not process your project ({last_line}).",
+                details,
+            )
 
         cleaned = root.parent / f"{root.name}_arXiv"
         if not cleaned.exists():
@@ -327,6 +439,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None):
                 f"The cleaner did not keep {main_tex.name}; the output would be "
                 "unusable on arXiv."
             )
+
+        _restore_encodings(restore, root, cleaned)
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
