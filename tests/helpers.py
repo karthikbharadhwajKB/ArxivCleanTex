@@ -1,6 +1,7 @@
 import io
 import zipfile
 
+
 def make_zip(files):
     """Builds a zip from {name: str | bytes}."""
     buffer = io.BytesIO()

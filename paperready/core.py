@@ -1,5 +1,6 @@
 """Shared upload handling: safe zip extraction and OS-junk removal."""
 
+import contextlib
 import io
 import shutil
 import zipfile
@@ -20,11 +21,7 @@ class InvalidZipError(CleanerError):
 
 
 def _file_sizes(base):
-    return {
-        p.relative_to(base).as_posix(): p.stat().st_size
-        for p in sorted(base.rglob("*"))
-        if p.is_file()
-    }
+    return {p.relative_to(base).as_posix(): p.stat().st_size for p in sorted(base.rglob("*")) if p.is_file()}
 
 
 def _is_ignored(path, base):
@@ -38,10 +35,8 @@ def _entry_name(info):
     if not info.flag_bits & 0x800:
         # Without the UTF-8 flag, zipfile decodes names as cp437, but macOS and
         # the `zip` CLI write UTF-8 there anyway.
-        try:
+        with contextlib.suppress(UnicodeEncodeError, UnicodeDecodeError):
             name = name.encode("cp437").decode("utf-8")
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            pass
     # Some Windows tools write "\\" as the separator; it is never valid in a
     # file name on Windows, so it is always a separator.
     return name.replace("\\", "/")
@@ -55,7 +50,7 @@ def _safe_extract(zip_bytes, dest):
         raise InvalidZipError(
             "The uploaded file is not a valid .zip archive (it may be corrupted "
             "or incomplete). Please re-create the zip and try again."
-        )
+        ) from None
     with zf:
         for info in zf.infolist():
             name = _entry_name(info)
@@ -63,9 +58,7 @@ def _safe_extract(zip_bytes, dest):
             if target != dest_resolved and dest_resolved not in target.parents:
                 raise InvalidZipError(f"Unsafe path in zip: {name}")
             if info.flag_bits & 0x1:
-                raise InvalidZipError(
-                    "The zip is password-protected. Please upload an unencrypted zip."
-                )
+                raise InvalidZipError("The zip is password-protected. Please upload an unencrypted zip.")
             if name.endswith("/"):
                 target.mkdir(parents=True, exist_ok=True)
                 continue
@@ -76,16 +69,16 @@ def _safe_extract(zip_bytes, dest):
                     f"“{name}” uses a compression method this app cannot read. "
                     "Please re-create the zip with standard (Deflate) compression, "
                     "e.g. with your system's built-in “Compress” option."
-                )
+                ) from None
             except RuntimeError:
                 raise InvalidZipError(
                     "The zip is password-protected. Please upload an unencrypted zip."
-                )
+                ) from None
             except (zipfile.BadZipFile, EOFError, OSError, ValueError, zlib.error) as error:
                 raise InvalidZipError(
                     f"The zip is corrupted: “{name}” could not be read ({error}). "
                     "Please re-create the zip and try again."
-                )
+                ) from None
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
 
@@ -97,7 +90,5 @@ def _remove_junk(base):
             path.unlink()
         elif path.is_dir() and path.name in JUNK_DIRS:
             shutil.rmtree(path)
-        elif path.is_file() and (
-            path.name in JUNK_FILES or path.name.startswith("._")
-        ):
+        elif path.is_file() and (path.name in JUNK_FILES or path.name.startswith("._")):
             path.unlink()
