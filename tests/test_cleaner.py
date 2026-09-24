@@ -1,0 +1,581 @@
+import io
+import struct
+import zipfile
+
+import pytest
+
+import cleaner
+from cleaner import (
+    AmbiguousMainFileError,
+    CleaningFailedError,
+    InvalidZipError,
+    MainFileNotFoundError,
+    NoTexFilesError,
+    clean_zip,
+    find_main_tex,
+    find_missing_files,
+    parse_commands,
+)
+from helpers import doc, make_raw_name_zip, make_zip, unzip
+
+APPLE_DOUBLE = (
+    struct.pack(">IIH", 0x00051607, 0x00020000, 0)
+    + b"Mac OS X        "
+    + struct.pack(">H", 2)
+    + bytes(range(0x80, 0xFF))
+)
+
+
+# --- Zip extraction -----------------------------------------------------------
+
+
+class TestEntryName:
+    def test_plain_name_is_unchanged(self):
+        assert cleaner._entry_name(zipfile.ZipInfo("paper/main.tex")) == "paper/main.tex"
+
+    def test_backslashes_become_separators(self):
+        info = zipfile.ZipInfo("paper\\figs\\plot.png")
+        assert cleaner._entry_name(info) == "paper/figs/plot.png"
+
+    def test_utf8_bytes_without_flag_are_decoded_as_utf8(self):
+        info = zipfile.ZipInfo("résumé.tex".encode("utf-8").decode("cp437"))
+        info.flag_bits &= ~0x800
+        assert cleaner._entry_name(info) == "résumé.tex"
+
+    def test_real_cp437_name_is_kept(self):
+        info = zipfile.ZipInfo("\u2560.tex")  # "╠": cp437 byte 0xCC, invalid UTF-8
+        info.flag_bits &= ~0x800
+        assert cleaner._entry_name(info) == "\u2560.tex"
+
+    def test_name_with_utf8_flag_is_trusted(self):
+        info = zipfile.ZipInfo("图.tex")
+        info.flag_bits |= 0x800
+        assert cleaner._entry_name(info) == "图.tex"
+
+
+class TestSafeExtract:
+    def test_extracts_files_and_folders(self, tmp_path):
+        data = make_zip({"a/b/main.tex": "x", "a/empty/": "", "top.txt": "y"})
+        cleaner._safe_extract(data, tmp_path)
+        assert (tmp_path / "a/b/main.tex").read_text() == "x"
+        assert (tmp_path / "a/empty").is_dir()
+        assert (tmp_path / "top.txt").read_text() == "y"
+
+    def test_windows_backslash_paths(self, tmp_path):
+        cleaner._safe_extract(make_zip({"paper\\main.tex": "x"}), tmp_path)
+        assert (tmp_path / "paper/main.tex").is_file()
+
+    def test_utf8_names_without_flag(self, tmp_path):
+        cleaner._safe_extract(make_raw_name_zip({"résumé/图.tex": "x"}), tmp_path)
+        assert (tmp_path / "résumé/图.tex").is_file()
+
+    def test_not_a_zip(self, tmp_path):
+        with pytest.raises(InvalidZipError, match="not a valid .zip"):
+            cleaner._safe_extract(b"definitely not a zip", tmp_path)
+
+    def test_truncated_zip(self, tmp_path):
+        with pytest.raises(InvalidZipError, match="not a valid .zip"):
+            cleaner._safe_extract(make_zip({"main.tex": doc()})[:40], tmp_path)
+
+    @pytest.mark.parametrize("name", ["../evil.tex", "/etc/evil.tex", "a/../../evil.tex"])
+    def test_rejects_paths_outside_destination(self, tmp_path, name):
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        with pytest.raises(InvalidZipError, match="Unsafe path"):
+            cleaner._safe_extract(make_zip({name: "x"}), dest)
+
+    def test_password_protected(self, tmp_path):
+        data = bytearray(make_zip({"main.tex": doc()}))
+        for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+            data[data.find(signature) + offset] |= 0x1
+        with pytest.raises(InvalidZipError, match="password-protected"):
+            cleaner._safe_extract(bytes(data), tmp_path)
+
+    def test_unsupported_compression(self, tmp_path):
+        data = bytearray(make_zip({"main.tex": doc()}))
+        deflate64 = (9).to_bytes(2, "little")
+        data[8:10] = deflate64
+        central = data.find(b"PK\x01\x02")
+        data[central + 10 : central + 12] = deflate64
+        with pytest.raises(InvalidZipError, match="compression method"):
+            cleaner._safe_extract(bytes(data), tmp_path)
+
+    def test_corrupted_entry(self, tmp_path):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("main.tex", doc("x" * 5000))
+        data = bytearray(buffer.getvalue())
+        data[60:70] = b"\xff" * 10
+        with pytest.raises(InvalidZipError, match="corrupted"):
+            cleaner._safe_extract(bytes(data), tmp_path)
+
+
+class TestRemoveJunk:
+    def test_removes_os_metadata(self, tree):
+        base = tree(
+            {
+                "main.tex": "x",
+                "__MACOSX/paper/._main.tex": APPLE_DOUBLE,
+                "paper/._main.tex": APPLE_DOUBLE,
+                "paper/.DS_Store": "x",
+                "figs/Thumbs.db": "x",
+                "figs/desktop.ini": "x",
+                "figs/plot.png": "x",
+            }
+        )
+        cleaner._remove_junk(base)
+        remaining = sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file())
+        assert remaining == ["figs/plot.png", "main.tex"]
+        assert not (base / "__MACOSX").exists()
+
+    def test_removes_symlinks(self, tree):
+        base = tree({"main.tex": "x"})
+        (base / "link.tex").symlink_to("/etc/passwd")
+        cleaner._remove_junk(base)
+        assert not (base / "link.tex").is_symlink()
+
+
+# --- Encodings ----------------------------------------------------------------
+
+
+class TestEncodings:
+    def test_utf8_files_are_untouched(self, tree):
+        base = tree({"main.tex": "café", "fig.tikz": "x"})
+        assert cleaner._normalize_encodings(base) == ([], [])
+        assert (base / "main.tex").read_text("utf-8") == "café"
+
+    def test_non_utf8_file_becomes_utf8_and_round_trips(self, tree):
+        original = "Wait… “quoted” café ¢".encode("cp1252")
+        base = tree({"main.tex": original})
+        restore, converted = cleaner._normalize_encodings(base)
+        assert restore == [base / "main.tex"] and converted == []
+        text = (base / "main.tex").read_text("utf-8")  # valid UTF-8 now
+        assert cleaner._encode_back(text) == original
+
+    def test_placeholders_are_not_whitespace(self, tree):
+        # cp1252 "…" is 0x85, which is U+0085 (a line break) under Latin-1.
+        base = tree({"main.tex": b"a\x85b"})
+        cleaner._normalize_encodings(base)
+        text = (base / "main.tex").read_text("utf-8")
+        assert len(text.splitlines()) == 1 and not text[1].isspace()
+
+    def test_encode_back_handles_every_high_byte(self):
+        data = bytes(range(0x80, 0x100)) + "é".encode("utf-8")
+        text = data.decode("utf-8", errors="arxivcleantex_pua")
+        assert cleaner._encode_back(text) == data
+
+    @pytest.mark.parametrize("codec", ["utf-16", "utf-32"])
+    def test_utf16_and_utf32_are_converted(self, tree, codec):
+        base = tree({"main.tex": "café".encode(codec)})
+        restore, converted = cleaner._normalize_encodings(base)
+        assert restore == [] and converted == [base / "main.tex"]
+        assert (base / "main.tex").read_text("utf-8") == "café"
+
+    def test_only_files_the_cleaner_reads(self, tree):
+        base = tree({"refs.bib": "é".encode("latin-1"), "style.sty": b"\xff"})
+        assert cleaner._normalize_encodings(base) == ([], [])
+
+    def test_restore_encodings(self, tree):
+        base = tree({"sec/a.tex": "é".encode("latin-1")})
+        cleaner._normalize_encodings(base)
+        cleaner._restore_encodings([base.joinpath("sec/a.tex").relative_to(base)], base)
+        assert (base / "sec/a.tex").read_bytes() == b"\xe9"
+
+    def test_restore_skips_files_the_cleaner_dropped(self, tree):
+        base = tree({})
+        cleaner._restore_encodings([base.joinpath("gone.tex").relative_to(base)], base)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "\\usepackage[latin1]{inputenc}",
+            "\\usepackage[T1]{fontenc}\\usepackage[ansinew]{inputenc}",
+            "\\RequirePackage[koi8-r]{inputenc}",
+            "\\usepackage[cp1251]{inputenc}",
+            "\\usepackage[utf8,latin9]{inputenc}",
+            "\\inputencoding{latin2}",
+            "\\begin{CJK}{GBK}{song}",
+            "\\XeTeXinputencoding \"cp1252\"",
+        ],
+    )
+    def test_declares_encoding(self, text):
+        assert cleaner._declares_encoding(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        ["", "\\usepackage[utf8]{inputenc}", "\\inputencoding{utf8}", "\\usepackage[T1]{fontenc}"],
+    )
+    def test_does_not_declare_encoding(self, text):
+        assert not cleaner._declares_encoding(text)
+
+
+# --- Main file detection --------------------------------------------------------
+
+
+class TestHelpers:
+    def test_strip_comments(self):
+        assert cleaner._strip_comments("a % c\nb \\% kept % gone") == "a \nb \\% kept "
+
+    def test_is_main_candidate(self, tree):
+        base = tree(
+            {
+                "main.tex": doc(),
+                "chapter.tex": "\\section{x}",
+                "commented.tex": "% \\documentclass{article}\n\\begin{document}",
+            }
+        )
+        assert cleaner._is_main_candidate(base / "main.tex")
+        assert not cleaner._is_main_candidate(base / "chapter.tex")
+        assert not cleaner._is_main_candidate(base / "commented.tex")
+
+    def test_all_tex_files_skips_junk(self, tree):
+        base = tree({"a.tex": "", "__MACOSX/b.tex": "", "._c.tex": "", ".git/d.tex": "", "e.txt": ""})
+        assert [p.name for p in cleaner._all_tex_files(base)] == ["a.tex"]
+
+    def test_match_user_path(self, tree):
+        base = tree({"Paper/src/main.tex": "", "other/main.tex": ""})
+        assert cleaner._match_user_path(base, "src/main.tex") == [base / "Paper/src/main.tex"]
+        assert cleaner._match_user_path(base, " ./paper/ ") == [base / "Paper"]
+        assert cleaner._match_user_path(base, "Paper\\src") == [base / "Paper/src"]
+        assert len(cleaner._match_user_path(base, "main.tex")) == 2
+
+    def test_match_user_path_skips_junk(self, tree):
+        base = tree({"paper/main.tex": "", "__MACOSX/paper/main.tex": ""})
+        assert cleaner._match_user_path(base, "paper/main.tex") == [base / "paper/main.tex"]
+
+    def test_in_previous_output(self, tree):
+        base = tree({"paper_arXiv/main.tex": "", "paper/main.tex": ""})
+        assert cleaner._in_previous_output(base / "paper_arXiv/main.tex", base)
+        assert not cleaner._in_previous_output(base / "paper/main.tex", base)
+
+
+class TestFindMainTex:
+    def test_prefers_main_tex(self, tree):
+        base = tree({"main.tex": doc(), "other.tex": doc()})
+        assert find_main_tex(base) == base / "main.tex"
+
+    def test_deeply_nested(self, tree):
+        base = tree({"a/b/c/main.tex": doc(), "a/readme.txt": ""})
+        assert find_main_tex(base) == base / "a/b/c/main.tex"
+
+    def test_single_candidate_with_any_name(self, tree):
+        base = tree({"src/paper.tex": doc(), "src/intro.tex": "Intro"})
+        assert find_main_tex(base) == base / "src/paper.tex"
+
+    def test_shallowest_candidate_wins(self, tree):
+        base = tree({"paper.tex": doc(), "figs/standalone.tex": doc()})
+        assert find_main_tex(base) == base / "paper.tex"
+
+    def test_main_tex_without_documentclass_is_fallback(self, tree):
+        base = tree({"main.tex": "\\input{x}", "x.tex": "y"})
+        assert find_main_tex(base) == base / "main.tex"
+
+    def test_ignores_previous_arxiv_output(self, tree):
+        base = tree({"paper/main.tex": doc(), "paper_arXiv/main.tex": doc()})
+        assert find_main_tex(base) == base / "paper/main.tex"
+
+    def test_ambiguous(self, tree):
+        base = tree({"p1/main.tex": doc(), "p2/main.tex": doc()})
+        with pytest.raises(AmbiguousMainFileError, match="p1/main.tex"):
+            find_main_tex(base)
+
+    def test_no_tex_files(self, tree):
+        base = tree({"paper.pdf": "x"})
+        with pytest.raises(NoTexFilesError, match="No .tex files"):
+            find_main_tex(base)
+
+    def test_only_upper_case_extension(self, tree):
+        base = tree({"MAIN.TEX": doc()})
+        with pytest.raises(NoTexFilesError, match="upper-case"):
+            find_main_tex(base)
+
+    def test_no_candidate(self, tree):
+        base = tree({"a.tex": "x", "b.tex": "y"})
+        with pytest.raises(MainFileNotFoundError, match="a.tex"):
+            find_main_tex(base)
+
+    @pytest.mark.parametrize("hint", ["paper.tex", "paper", "src/paper.tex", "SRC/PAPER.TEX", "  paper.tex  "])
+    def test_hint_file(self, tree, hint):
+        base = tree({"src/paper.tex": doc(), "main.tex": doc()})
+        assert find_main_tex(base, hint) == base / "src/paper.tex"
+
+    @pytest.mark.parametrize("hint", ["p2", "p2/", "./p2", "p2\\"])
+    def test_hint_folder(self, tree, hint):
+        base = tree({"p1/main.tex": doc(), "p2/main.tex": doc()})
+        assert find_main_tex(base, hint) == base / "p2/main.tex"
+
+    def test_hint_folder_without_tex(self, tree):
+        base = tree({"main.tex": doc(), "figs/plot.png": ""})
+        with pytest.raises(NoTexFilesError, match="figs"):
+            find_main_tex(base, "figs")
+
+    def test_hint_folder_without_candidate(self, tree):
+        base = tree({"main.tex": doc(), "sections/intro.tex": "x"})
+        with pytest.raises(MainFileNotFoundError, match="sections"):
+            find_main_tex(base, "sections")
+
+    def test_hint_not_found_lists_files(self, tree):
+        base = tree({"main.tex": doc()})
+        with pytest.raises(MainFileNotFoundError, match="main.tex"):
+            find_main_tex(base, "nope.tex")
+
+    def test_hint_matches_several_files(self, tree):
+        base = tree({"a/paper.tex": doc(), "b/paper.tex": doc()})
+        with pytest.raises(AmbiguousMainFileError, match="several files"):
+            find_main_tex(base, "paper.tex")
+
+    def test_hint_matches_several_folders(self, tree):
+        base = tree({"a/src/main.tex": doc(), "b/src/main.tex": doc()})
+        with pytest.raises(AmbiguousMainFileError, match="several folders"):
+            find_main_tex(base, "src")
+
+    def test_empty_hint_means_auto_detect(self, tree):
+        base = tree({"main.tex": doc()})
+        assert find_main_tex(base, "   ") == base / "main.tex"
+
+
+# --- Commands and references ------------------------------------------------------
+
+
+class TestParseCommands:
+    @pytest.mark.parametrize(
+        "raw, valid, rejected",
+        [
+            ("", [], []),
+            ("todo note", ["todo", "note"], []),
+            ("\\todo, \\note{}", ["todo", "note"], []),
+            ("todo,,note", ["todo", "note"], []),
+            ("my@cmd", ["my@cmd"], []),
+            ("todo* x-y \\a\\b", [], ["todo*", "x-y", "\\a\\b"]),
+        ],
+    )
+    def test_parse(self, raw, valid, rejected):
+        assert parse_commands(raw) == (valid, rejected)
+
+
+class TestFindMissingFiles:
+    def test_complete_project(self, tree):
+        base = tree(
+            {
+                "main.tex": doc(
+                    "\\input{sections/intro}\\include{sections/end.tex}"
+                    "\\includegraphics[width=1cm]{plot}\\includegraphics{figs/b.pdf}"
+                    "\\bibliography{refs, more}",
+                    "\\graphicspath{{figs/}}",
+                ),
+                "sections/intro.tex": "\\includegraphics{figs/c}",
+                "sections/end.tex": "",
+                "figs/plot.png": "",
+                "figs/b.pdf": "",
+                "figs/c.jpg": "",
+                "refs.bib": "",
+                "more.bib": "",
+            }
+        )
+        assert find_missing_files(base, base / "main.tex") == ([], True)
+
+    def test_reports_missing_with_source(self, tree):
+        base = tree(
+            {
+                "main.tex": doc("\\input{sections/a}\\includegraphics{nope}\\addbibresource{refs.bib}"),
+                "sections/a.tex": "\\input{sections/gone}",
+            }
+        )
+        missing, uses_bib = find_missing_files(base, base / "main.tex")
+        assert uses_bib
+        assert sorted(missing) == [
+            ("main.tex", "nope"),
+            ("main.tex", "refs.bib"),
+            ("sections/a.tex", "sections/gone"),
+        ]
+
+    def test_ignores_comments_and_macros(self, tree):
+        base = tree({"main.tex": doc("% \\input{gone}\n\\input{\\dir/x}\\includegraphics{#1}")})
+        assert find_missing_files(base, base / "main.tex") == ([], False)
+
+    def test_follows_inputs_of_non_tex_files(self, tree):
+        base = tree({"main.tex": doc("\\input{figs/plot.tikz}"), "figs/plot.tikz": "\\input{gone}"})
+        assert find_missing_files(base, base / "main.tex") == ([("figs/plot.tikz", "gone")], False)
+
+    def test_follows_inputs_of_files_without_extension(self, tree):
+        base = tree({"main.tex": doc("\\input{sections/intro}"), "sections/intro": "\\input{gone}"})
+        assert find_missing_files(base, base / "main.tex") == ([("sections/intro", "gone")], False)
+
+    def test_check_bib_false(self, tree):
+        base = tree({"main.tex": doc("\\bibliography{refs}")})
+        assert find_missing_files(base, base / "main.tex", check_bib=False) == ([], True)
+
+    def test_cyclic_inputs_terminate(self, tree):
+        base = tree({"main.tex": doc("\\input{a}"), "a.tex": "\\input{main}"})
+        assert find_missing_files(base, base / "main.tex") == ([], False)
+
+    def test_odd_references_do_not_crash(self, tree):
+        base = tree({"main.tex": doc("\\input{/}\\input{.}\\input{" + "a" * 300 + "}")})
+        missing, _ = find_missing_files(base, base / "main.tex")
+        assert len(missing) == 3
+
+
+# --- End to end -----------------------------------------------------------------
+
+
+class TestCleanZip:
+    def test_flat_project(self):
+        result = clean_zip(
+            make_zip(
+                {
+                    "main.tex": doc("Hi % secret\n\\input{sections/intro}\\includegraphics{figs/plot}"),
+                    "sections/intro.tex": "Intro % secret",
+                    "figs/plot.png": "png",
+                    "figs/unused.png": "png",
+                    "main.aux": "aux",
+                }
+            )
+        )
+        files = unzip(result.zip_bytes)
+        assert sorted(files) == ["figs/plot.png", "main.tex", "sections/intro.tex"]
+        assert b"secret" not in files["main.tex"] + files["sections/intro.tex"]
+        assert (result.main_file, result.project_root) == ("main.tex", ".")
+        assert result.missing_files == [] and result.warnings == []
+
+    def test_nested_project_is_flattened(self):
+        result = clean_zip(make_zip({"a/b/paper/main.tex": doc(), "a/README.md": "x"}))
+        assert list(unzip(result.zip_bytes)) == ["main.tex"]
+        assert (result.main_file, result.project_root) == ("a/b/paper/main.tex", "a/b/paper")
+
+    def test_main_hint(self):
+        result = clean_zip(make_zip({"p1/main.tex": doc("one"), "p2/main.tex": doc("two")}), [], "p2")
+        assert b"two" in unzip(result.zip_bytes)["main.tex"]
+        assert any("outside “p2”" in w for w in result.warnings)
+
+    @pytest.mark.parametrize(
+        "files",
+        [
+            {"main.tex": doc(), "__MACOSX/._main.tex": APPLE_DOUBLE, ".DS_Store": b"\x00\xa2"},
+            {"paper/main.tex": doc(), "__MACOSX/paper/._main.tex": APPLE_DOUBLE},
+        ],
+    )
+    def test_macos_zips(self, files):
+        assert list(unzip(clean_zip(make_zip(files)).zip_bytes)) == ["main.tex"]
+
+    def test_latin1_bytes_are_preserved(self):
+        source = doc("Price: 5¢ café % commentaire é", "\\usepackage[latin1]{inputenc}").encode("latin-1")
+        result = clean_zip(make_zip({"main.tex": source}))
+        out = unzip(result.zip_bytes)["main.tex"]
+        assert b"5\xa2 caf\xe9 %" in out and b"commentaire" not in out
+        assert result.warnings == []
+
+    def test_undeclared_non_utf8_warns(self):
+        result = clean_zip(make_zip({"main.tex": doc("Привет").encode("cp1251")}))
+        assert any("not valid UTF-8" in w for w in result.warnings)
+
+    def test_encoding_declared_in_sty(self):
+        files = {
+            "main.tex": doc("Привет", "\\usepackage{mystyle}").encode("koi8-r"),
+            "mystyle.sty": "\\RequirePackage[koi8-r]{inputenc}",
+        }
+        assert clean_zip(make_zip(files)).warnings == []
+
+    def test_utf16_is_converted(self):
+        result = clean_zip(make_zip({"main.tex": doc("café").encode("utf-16")}))
+        assert "café".encode() in unzip(result.zip_bytes)["main.tex"]
+        assert any("UTF-16" in w for w in result.warnings)
+
+    def test_utf16_outside_paper_is_not_reported(self):
+        files = {"a/main.tex": doc(), "b/main.tex": doc().encode("utf-16")}
+        assert not any("UTF-16" in w for w in clean_zip(make_zip(files), [], "a").warnings)
+
+    def test_windows_zip(self):
+        files = {"paper\\main.tex": doc("\\includegraphics{figs/plot}"), "paper\\figs\\plot.png": "x"}
+        assert sorted(unzip(clean_zip(make_zip(files)).zip_bytes)) == ["figs/plot.png", "main.tex"]
+
+    def test_non_ascii_names(self):
+        files = {"résumé/main.tex": doc("\\includegraphics{图/plot}"), "résumé/图/plot.png": b"x"}
+        result = clean_zip(make_raw_name_zip(files))
+        assert result.main_file == "résumé/main.tex" and result.missing_files == []
+        assert sorted(unzip(result.zip_bytes)) == ["main.tex", "图/plot.png"]
+
+    def test_commands_to_delete(self):
+        names, _ = parse_commands("\\todo note")
+        result = clean_zip(make_zip({"main.tex": doc("A\\todo{secret}B\\note{x}C")}), ["--commands_to_delete", *names])
+        assert b"ABC" in unzip(result.zip_bytes)["main.tex"]
+
+    def test_keep_bib(self):
+        files = {"main.tex": doc("\\bibliography{refs}"), "refs.bib": "@a{}", "main.bbl": "x"}
+        assert "refs.bib" not in unzip(clean_zip(make_zip(files)).zip_bytes)
+        assert "refs.bib" in unzip(clean_zip(make_zip(files), ["--keep_bib"]).zip_bytes)
+
+    def test_missing_bbl_warns(self):
+        result = clean_zip(make_zip({"main.tex": doc("\\bibliography{refs}"), "refs.bib": "@a{}"}))
+        assert any("main.bbl" in w for w in result.warnings)
+
+    def test_bbl_present(self):
+        files = {"main.tex": doc("\\bibliography{refs}"), "refs.bib": "@a{}", "main.bbl": "x"}
+        result = clean_zip(make_zip(files))
+        assert "main.bbl" in unzip(result.zip_bytes) and result.warnings == []
+
+    def test_missing_files_reported(self):
+        result = clean_zip(make_zip({"main.tex": doc("\\includegraphics{figs/gone}")}))
+        assert result.missing_files == [("main.tex", "figs/gone")]
+
+    def test_files_dropped_by_cleaner_are_reported(self):
+        files = {
+            "main.tex": doc("\\input{sections/intro (1)}\\includegraphics{digit/plot}"),
+            "sections/intro (1).tex": "Intro",
+            "digit/plot.png": "x",
+        }
+        warning = " ".join(clean_zip(make_zip(files)).warnings)
+        assert "sections/intro (1)" in warning and "digit/plot" in warning
+
+    def test_intentionally_removed_files_are_not_reported(self):
+        files = {"main.tex": doc("\\iffalse\\includegraphics{figs/hidden}\\fi ok"), "figs/hidden.png": "x"}
+        assert clean_zip(make_zip(files)).warnings == []
+
+    def test_folder_named_like_a_zip(self):
+        assert list(unzip(clean_zip(make_zip({"paper.zip/main.tex": doc()})).zip_bytes)) == ["main.tex"]
+
+    def test_upper_case_extension_warns(self):
+        files = {"main.tex": doc("\\input{App.TEX}"), "App.TEX": "x % secret"}
+        assert any("App.TEX" in w for w in clean_zip(make_zip(files)).warnings)
+
+    def test_size_limit_warning(self, monkeypatch):
+        monkeypatch.setattr(cleaner, "ARXIV_SIZE_LIMIT", 10)
+        assert any("50 MB" in w for w in clean_zip(make_zip({"main.tex": doc()})).warnings)
+
+    def test_errors_propagate(self):
+        with pytest.raises(InvalidZipError):
+            clean_zip(b"nope")
+        with pytest.raises(NoTexFilesError):
+            clean_zip(make_zip({"a.txt": "x"}))
+
+    def test_cleaner_failure(self, monkeypatch):
+        class Failed:
+            returncode = 1
+            stdout = ""
+            stderr = "Traceback (most recent call last):\nValueError: boom"
+
+        monkeypatch.setattr(cleaner.subprocess, "run", lambda *a, **k: Failed())
+        with pytest.raises(CleaningFailedError, match="ValueError: boom") as info:
+            clean_zip(make_zip({"main.tex": doc()}))
+        assert "Traceback" in info.value.details
+
+    def test_cleaner_produced_no_output(self, monkeypatch):
+        class Succeeded:
+            returncode = 0
+            stdout = stderr = ""
+
+        monkeypatch.setattr(cleaner.subprocess, "run", lambda *a, **k: Succeeded())
+        with pytest.raises(CleaningFailedError, match="not created"):
+            clean_zip(make_zip({"main.tex": doc()}))
+
+    def test_cleaner_dropped_main_file(self, monkeypatch, tmp_path):
+        class Succeeded:
+            returncode = 0
+            stdout = stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            (cleaner.Path(cmd[-1]).parent / "paper_arXiv").mkdir()
+            return Succeeded()
+
+        monkeypatch.setattr(cleaner.subprocess, "run", fake_run)
+        with pytest.raises(CleaningFailedError, match="did not keep main.tex"):
+            clean_zip(make_zip({"main.tex": doc()}))
