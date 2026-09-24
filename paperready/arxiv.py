@@ -63,6 +63,9 @@ _SUPPORT = {
     ".cls": re.compile(r"\\documentclass\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}"),
     ".bst": re.compile(r"\\bibliographystyle\s*\{([^}]+)\}"),
 }
+# Images that ship with TeX distributions (the mwe package), never in a project.
+_TEX_DISTRIBUTION_IMAGE = re.compile(r"example-(?:image|grid)(?:-[A-Za-z0-9]+)*")
+
 # Figure types arxiv_latex_cleaner keeps when referenced without an extension.
 _LOOSE_FIGURE_EXTS = {".png", ".jpg", ".jpeg", ".pdf"}
 _GRAPHICSPATH = re.compile(r"\\graphicspath\s*\{((?:\s*\{[^}]*\}\s*)+)\}")
@@ -177,8 +180,22 @@ def _strip_comments(text):
     return "\n".join(_COMMENT.sub("", line) for line in text.splitlines())
 
 
+# Text LaTeX prints literally instead of running, e.g. usage examples in
+# templates: \begin{verbatim}\bibliography{anthology,custom}\end{verbatim}.
+_VERBATIM_ENV = re.compile(
+    r"\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|comment)\}.*?\\end\s*\{\1\}", re.DOTALL
+)
+_VERBATIM_INLINE = re.compile(r"\\(?:verb\*?|lstinline)([^\sA-Za-z{])(?:(?!\1).)*\1")
+
+
+def _active_latex(text):
+    """The LaTeX that actually runs: without comments and verbatim text."""
+    text = _VERBATIM_ENV.sub("", _strip_comments(text))
+    return _VERBATIM_INLINE.sub("", text)
+
+
 def _is_main_candidate(path):
-    text = _strip_comments(_read_tex(path))
+    text = _active_latex(_read_tex(path))
     return "\\documentclass" in text and "\\begin{document}" in text
 
 
@@ -552,7 +569,7 @@ def _scan_references(root, main_tex):
         if tex in seen:
             continue
         seen.add(tex)
-        text = _strip_comments(_read_tex(tex))
+        text = _active_latex(_read_tex(tex))
         where = _rel(tex, root)
 
         for m in _GRAPHICSPATH.finditer(text):
@@ -594,7 +611,9 @@ def find_missing_files(root, main_tex, check_bib=True):
     missing = [
         (where, name)
         for where, kind, name, dirs in refs
-        if kind in kinds and not _resolve(root, kind, name, dirs)
+        if kind in kinds
+        and not _resolve(root, kind, name, dirs)
+        and not (kind == "graphics" and _TEX_DISTRIBUTION_IMAGE.fullmatch(PurePosixPath(name).stem))
     ]
     return missing, uses_bib
 
@@ -657,10 +676,10 @@ def _braced(text, start):
 
 def extract_title(text):
     """The paper's \\title{...} as plain text, e.g. for comparing with a PDF."""
-    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", _strip_comments(text))
+    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", _active_latex(text))
     if not m:
         return ""
-    title = _braced(_strip_comments(text), m.end() - 1)
+    title = _braced(_active_latex(text), m.end() - 1)
     title = re.sub(r"\\(?:thanks|footnote)\s*\{[^{}]*\}", "", title)  # footnotes aren't title text
     title = re.sub(r"\\\\(?:\[[^\]]*\])?|~", " ", title)  # line breaks, ties
     title = re.sub(r"\\[A-Za-z@]+\*?", " ", title)  # commands like \\textbf
@@ -722,7 +741,7 @@ def _citations(root, tex, keys, seen):
     if tex in seen:
         return
     seen.add(tex)
-    text = _strip_comments(_read_tex(tex))
+    text = _active_latex(_read_tex(tex))
     for m in re.finditer(f"{_INPUT.pattern}|{_CITE.pattern}", text):
         if m.group(1) is not None:
             target = _resolve(root, "input", m.group(1).strip())
@@ -739,16 +758,18 @@ def generate_bbl(original_root, cleaned_root, main_name):
 
     Citations come from the cleaned sources (so ones only in removed comments
     are left out); .bib and .bst files come from the upload. Returns
-    (problem, unknown_keys): problem is None on success, otherwise a short
-    reason; unknown_keys are citations BibTeX found in no .bib file.
+    (problem, unknown_keys, missing_bibs): problem is None on success,
+    otherwise a short reason; unknown_keys are citations BibTeX found in no
+    .bib file; missing_bibs are listed .bib files that are not in the upload
+    (like BibTeX, it goes on with the others).
     """
     main_tex = cleaned_root / main_name
-    text = "\n".join(_strip_comments(_read_tex(p)) for p in cleaned_root.rglob("*.tex"))
+    text = "\n".join(_active_latex(_read_tex(p)) for p in cleaned_root.rglob("*.tex"))
     if _BIBLATEX.search(text):
-        return "biblatex needs Biber, which this app cannot run", []
+        return "biblatex needs Biber, which this app cannot run", [], []
     bibtex = shutil.which("bibtex")
     if not bibtex:
-        return "BibTeX is not installed on this server", []
+        return "BibTeX is not installed on this server", [], []
 
     refs, _ = _scan_references(cleaned_root, main_tex)
     bib_names = [n for _, kind, n, _ in refs if kind == ".bib"]
@@ -757,28 +778,32 @@ def generate_bbl(original_root, cleaned_root, main_name):
         # Templates such as ACL's set the style inside their .sty/.cls.
         for support in sorted(cleaned_root.rglob("*")):
             if support.suffix in (".sty", ".cls") and support.is_file():
-                text = _strip_comments(_read_tex(support))
+                text = _active_latex(_read_tex(support))
                 for m in _SUPPORT[".bst"].finditer(text):
                     styles += _split_args(m.group(1))
     if not styles:
-        return "no \\bibliographystyle was found", []
+        return "no \\bibliographystyle was found", [], []
 
     keys = []
     _citations(cleaned_root, main_tex, keys, set())
     if not keys:
-        return "the paper cites nothing", []
+        return "the paper cites nothing", [], []
 
     with tempfile.TemporaryDirectory() as work:
         work = Path(work)
-        databases = []
+        databases, missing_bibs = [], []
         for i, name in enumerate(bib_names):
             source = _resolve(original_root, ".bib", name) or _resolve(
                 original_root, ".bib", PurePosixPath(name).name
             )
             if not source:
-                return f"“{name}.bib” is not in the zip", []
+                missing_bibs.append(name)
+                continue
             shutil.copy(source, work / f"bib{i}.bib")
             databases.append(f"bib{i}")
+        if not databases:
+            names = ", ".join(f"“{n}.bib”" for n in missing_bibs)
+            return f"{names} {'is' if len(missing_bibs) == 1 else 'are'} not in the zip", [], []
         style = styles[-1]
         local_style = _resolve(original_root, ".bst", style)
         if local_style:
@@ -790,16 +815,16 @@ def generate_bbl(original_root, cleaned_root, main_name):
         try:
             run = subprocess.run([bibtex, "paper"], cwd=work, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
-            return "BibTeX took too long", []
+            return "BibTeX took too long", [], []
         bbl = work / "paper.bbl"
         if run.returncode > 1 or not bbl.is_file():
             if "couldn't open style file" in run.stdout:
-                return f"the style “{styles[-1]}.bst” is not in the zip", []
+                return f"the style “{styles[-1]}.bst” is not in the zip", [], []
             last = (run.stdout.strip().splitlines() or ["unknown error"])[-1]
-            return f"BibTeX failed: {last}", []
+            return f"BibTeX failed: {last}", [], []
         shutil.copy(bbl, main_tex.with_suffix(".bbl"))
         unknown = re.findall(r'didn\'t find a database entry for "([^"]+)"', run.stdout)
-    return None, unknown
+    return None, unknown, missing_bibs
 
 
 def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, make_bbl=True):
@@ -834,7 +859,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
             )
         in_root = [p for p in restore if root in p.parents]
         sources = [p for p in root.rglob("*") if p.suffix in (".tex", ".sty", ".cls") and p.is_file()]
-        if in_root and not any(_declares_encoding(_strip_comments(_read_tex(p))) for p in sources):
+        if in_root and not any(_declares_encoding(_active_latex(_read_tex(p))) for p in sources):
             names = ", ".join(f"“{_rel(p, src)}”" for p in in_root)
             warnings.append(
                 f"{names} is not valid UTF-8 and your sources do not declare an "
@@ -919,14 +944,20 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
         # uploaded but is absent from the output was dropped by the cleaner.
         generated_bbl = ""
         if missing_bbl:
-            problem, unknown = (
+            problem, unknown, missing_bibs = (
                 generate_bbl(staged, cleaned, main_tex.name)
                 if make_bbl
-                else ("generating it is turned off", [])
+                else ("generating it is turned off", [], [])
             )
             if problem is None:
                 generated_bbl = bbl.name
                 missing_bbl = False
+                if missing_bibs:
+                    warnings.append(
+                        f"{bbl.name} was generated without "
+                        + ", ".join(f"“{n}.bib”" for n in missing_bibs)
+                        + ", which is not in the zip. Citations only found there will show as “?”."
+                    )
                 if unknown:
                     warnings.append(
                         "BibTeX found no entry for "
@@ -943,7 +974,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
                 )
 
         review_version = detect_review_version(
-            "\n".join(_strip_comments(_read_tex(p)) for p in sorted(cleaned.rglob("*.tex")))
+            "\n".join(_active_latex(_read_tex(p)) for p in sorted(cleaned.rglob("*.tex")))
         )
         if review_version:
             warnings.append(f"This looks like a submission version, not a final one: {review_version}.")

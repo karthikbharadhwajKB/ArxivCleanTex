@@ -1308,7 +1308,11 @@ class TestGenerateBblFailures:
             raise cleaner.subprocess.TimeoutExpired(cmd, 60)
 
         monkeypatch.setattr(cleaner.subprocess, "run", slow)
-        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == ("BibTeX took too long", [])
+        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == (
+            "BibTeX took too long",
+            [],
+            [],
+        )
 
     @pytest.mark.parametrize(
         "stdout, reason",
@@ -1326,10 +1330,90 @@ class TestGenerateBblFailures:
             "run",
             lambda cmd, **kwargs: cleaner.subprocess.CompletedProcess(cmd, 2, stdout, ""),
         )
-        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == (reason, [])
+        assert cleaner.generate_bbl(base / "orig", base / "clean", "main.tex") == (reason, [], [])
 
     def test_cyclic_inputs(self, tree):
         base = tree({"main.tex": "\\input{a}\\cite{x}", "a.tex": "\\input{main}\\cite{y}"})
         keys = []
         cleaner._citations(base, base / "main.tex", keys, set())
         assert keys == ["y", "x"]
+
+
+# --- Found by testing real templates (ACL, ICLR, CVPR) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "tex, expected",
+    [
+        ("A\\begin{verbatim}\\input{x}\\end{verbatim}B", "AB"),
+        ("A\\begin{verbatim*}\\input{x}\\end{verbatim*}B", "AB"),
+        ("A\\begin{lstlisting}[language=TeX]\n\\input{x}\n\\end{lstlisting}B", "AB"),
+        ("A\\begin{minted}{latex}\\input{x}\\end{minted}B", "AB"),
+        ("A\\begin{comment}\\input{x}\\end{comment}B", "AB"),
+        ("Use \\verb|\\input{x}| or \\verb+\\cite{y}+.", "Use  or ."),
+        ("A % \\input{x}\nB", "A \nB"),
+        ("\\input{real}", "\\input{real}"),
+    ],
+)
+def test_active_latex(tex, expected):
+    assert cleaner._active_latex(tex) == expected
+
+
+def test_verbatim_examples_are_not_references():
+    # The ICLR and CVPR templates show \includegraphics{myfile.pdf} in verbatim.
+    files = {
+        "main.tex": doc(
+            "\\begin{verbatim}\n\\includegraphics{myfile.pdf}\n\\input{nothere}\n\\end{verbatim}"
+            "\\verb|\\includegraphics{other.pdf}|"
+        )
+    }
+    assert clean_zip(make_zip(files)).missing_files == []
+
+
+@pytest.mark.parametrize(
+    "name", ["example-image", "example-image-golden", "example-image-a.pdf", "example-grid-100x100pt"]
+)
+def test_images_shipped_with_tex_are_not_missing(name):
+    # The ACL and CVPR templates use the mwe package's example images.
+    files = {"main.tex": doc(f"\\includegraphics{{{name}}}")}
+    assert clean_zip(make_zip(files)).missing_files == []
+
+
+def test_verbatim_usepackage_is_not_a_review_version():
+    text = "\\usepackage[final]{acl}\n\\begin{verbatim}\n\\usepackage[review]{acl}\n\\end{verbatim}"
+    assert cleaner.detect_review_version(cleaner._active_latex(text)) == ""
+
+
+def test_verbatim_title_is_ignored():
+    assert cleaner.extract_title("\\begin{verbatim}\\title{Example}\\end{verbatim}\\title{Real}") == "Real"
+
+
+@needs_bibtex
+class TestBblFromRealTemplates:
+    def test_verbatim_bibliography_is_ignored(self):
+        # The ACL template shows \bibliography{anthology,custom} in verbatim.
+        files = {
+            "main.tex": doc(
+                "\\cite{alpha}\n\\begin{verbatim}\n\\bibliography{anthology,custom}\n\\end{verbatim}\n"
+                "\\bibliographystyle{plain}\\bibliography{refs}"
+            ),
+            "refs.bib": BIB,
+        }
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "main.bbl" and result.warnings == []
+        assert bbl_keys(result) == ["alpha"]
+
+    def test_missing_bib_among_several(self):
+        files = {
+            "main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{anthology,refs}"),
+            "refs.bib": BIB,
+        }
+        result = clean_zip(make_zip(files))
+        assert result.generated_bbl == "main.bbl" and bbl_keys(result) == ["alpha"]
+        assert any("without “anthology.bib”" in w for w in result.warnings)
+
+    def test_all_bibs_missing(self):
+        files = {"main.tex": doc("\\cite{alpha}\\bibliographystyle{plain}\\bibliography{one,two}")}
+        result = clean_zip(make_zip(files))
+        assert result.missing_bbl
+        assert any("“one.bib”, “two.bib” are not in the zip" in w for w in result.warnings)
