@@ -1298,6 +1298,40 @@ def test_review_switch_in_an_input_file_is_found():
     assert "cvpr" in clean_zip(make_zip(files)).review_version
 
 
+@pytest.mark.parametrize(
+    "load, files",
+    [
+        ("\\input preamble", {"preamble.tex": "\\usepackage[review]{acl}"}),
+        ("\\import{./}{preamble}", {"preamble.tex": "\\usepackage[review]{acl}"}),
+        (
+            "\\subimport{}{outer}",
+            {"outer.tex": "\\import{./}{preamble}", "preamble.tex": "\\usepackage[review]{acl}"},
+        ),
+        # (arxiv_latex_cleaner drops \import-ed files in subfolders, so only
+        # files next to the main file reach this check.)
+    ],
+)
+def test_review_switch_in_other_kinds_of_loaded_files_is_found(load, files):
+    main = f"\\documentclass{{article}}{load}\\begin{{document}}Hi\\end{{document}}"
+    assert "ACL template's review option" in clean_zip(make_zip({"main.tex": main, **files})).review_version
+
+
+def test_commented_out_review_option_in_a_style_file_does_not_count():
+    sty = ACL2020_STY + "% \\DeclareOption{review}{...}  (added in 2021)\n"
+    files = {"main.tex": doc("Hi", "\\usepackage{acl2020}"), "acl2020.sty": sty}
+    assert "\\aclfinalcopy" in clean_zip(make_zip(files)).review_version
+
+
+def test_only_the_style_next_to_the_main_file_is_read():
+    # \usepackage{acl2020} loads ./acl2020.sty, not an old copy in a subfolder.
+    files = {
+        "main.tex": doc("Hi", "\\usepackage{acl2020}"),
+        "acl2020.sty": ACL2020_STY,
+        "old/acl2020.sty": ACL2023_STY,
+    }
+    assert "\\aclfinalcopy" in clean_zip(make_zip(files)).review_version
+
+
 def test_uploaded_style_file_decides_the_review_check():
     files = {"main.tex": doc("Hi", "\\usepackage{acl2023}"), "acl2023.sty": ACL2023_STY}
     assert clean_zip(make_zip(files)).review_version == ""

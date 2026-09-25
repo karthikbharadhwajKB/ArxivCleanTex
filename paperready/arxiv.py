@@ -599,17 +599,29 @@ def _scan_references(root, main_tex):
     return refs, uses_bib
 
 
+# Other ways a paper loads its files: TeX's brace-less \input, and the import
+# package, whose \import{dir}{file} is relative to the main file and whose
+# \subimport{dir}{file} is relative to the file that uses it.
+_INPUT_BARE = re.compile(r"\\input\s+([^\s{}\\%]+)")
+_IMPORT = re.compile(r"\\(sub)?(?:import|includefrom|inputfrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}")
+
+
 def _paper_sources(root, main_tex):
     """The LaTeX files of the paper rooted at `main_tex`: itself and every file
-    it \\input s or \\include s, in reading order."""
+    it \\input s, \\include s or \\import s, in reading order."""
     files, queue = [], [main_tex]
     while queue:
         tex = queue.pop(0)
         if tex in files:
             continue
         files.append(tex)
-        for m in _INPUT.finditer(_active_latex(_read_tex(tex))):
-            name = m.group(1).strip()
+        text = _active_latex(_read_tex(tex))
+        names = [m.group(1).strip() for m in (*_INPUT.finditer(text), *_INPUT_BARE.finditer(text))]
+        here = PurePosixPath(_rel(tex.parent, root)) if tex.parent != root else PurePosixPath()
+        for m in _IMPORT.finditer(text):
+            folder = (here / m.group(2).strip()) if m.group(1) else PurePosixPath(m.group(2).strip())
+            names.append((folder / m.group(3).strip()).as_posix())
+        for name in names:
             target = _resolve(root, "input", name) if _is_literal(name) else None
             if target:
                 queue.append(target)
@@ -678,16 +690,21 @@ def _package_options(text, package_pattern):
                 yield options, name
 
 
+# Braces and escapes: "\}" is an escaped brace, but the "}" in "\\}" (a line
+# break, then a brace) is not, so escapes are read as two-character tokens.
+_BRACE_TOKEN = re.compile(r"\\.|[{}]", re.DOTALL)
+
+
 def _braced(text, start):
     """Returns the contents of the {...} group opening at text[start]."""
     depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{" and text[i - 1] != "\\":
+    for m in _BRACE_TOKEN.finditer(text, start):
+        if m.group() == "{":
             depth += 1
-        elif text[i] == "}" and text[i - 1] != "\\":
+        elif m.group() == "}":
             depth -= 1
             if depth == 0:
-                return text[start + 1 : i]
+                return text[start + 1 : m.start()]
     return text[start + 1 :]
 
 
@@ -713,12 +730,41 @@ _TITLE_LAYOUT = {
     "phantom": 1,
     "hphantom": 1,
     "vphantom": 1,
+    # Only the last argument is printed: \textcolor{orange}{Sys}, \href{url}{Sys}.
+    "textcolor": 1,
+    "color": 1,
+    "colorbox": 1,
+    "href": 1,
+    "hyperlink": 1,
+    "scalebox": 1,
+    "resizebox": 2,
+    "fontsize": 2,
 }
+# Limits that keep hostile uploads cheap; real titles and title macros are far
+# shorter. Expansion may add _TITLE_EXPANSION characters per title character (plus
+# a fixed allowance), so a self-referencing \def cannot run away.
+_TITLE_MAX = 2000
+_MACRO_BODY_MAX = 1000
+_TITLE_EXPANSION = 10
 
 
-def _macros(text):
-    """Zero-argument macros defined in `text`, as {name: body}."""
-    return {m.group(1) or m.group(2): _braced(text, m.end()) for m in _MACRO_DEF.finditer(text)}
+class _Macros:
+    """Zero-argument macros defined in some LaTeX sources (later definitions
+    win); a body is only read when the title uses the macro."""
+
+    def __init__(self, *sources):
+        self.defined = {
+            m.group(1) or m.group(2): (text, m.end()) for text in sources for m in _MACRO_DEF.finditer(text)
+        }
+        self.bodies = {}
+
+    def get(self, name):
+        if name not in self.bodies:
+            text, start = self.defined.get(name, (None, 0))
+            self.bodies[name] = (
+                _braced(text[start : start + _MACRO_BODY_MAX], 0) if text is not None else _LOGOS.get(name)
+            )
+        return self.bodies[name]
 
 
 def _drop_commands(text, commands):
@@ -746,18 +792,26 @@ def extract_title(text, definitions=""):
     m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", active)
     if not m:
         return ""
-    macros = {**_LOGOS, **_macros(_active_latex(definitions)), **_macros(active)}
-    title = _drop_commands(_braced(active, m.end() - 1), _TITLE_LAYOUT)
+    macros = _Macros(_active_latex(definitions), active)
+    breaks = re.compile(r"\\\\(?:\[[^\]]*\])?|~")  # line breaks, ties
+    raw = _braced(active[m.end() - 1 : m.end() - 1 + _TITLE_MAX], 0)
+    title = breaks.sub(" ", _drop_commands(raw, _TITLE_LAYOUT))
+    budget = _TITLE_EXPANSION * len(title) + 1000
+
+    def expand(command):
+        nonlocal budget
+        body = macros.get(command.group(1))
+        if body is None or len(body) > budget:
+            return command.group(0)
+        budget -= len(body)
+        return body
+
     for _ in range(3):  # macros may use other macros
-        expanded = re.sub(
-            r"\\([A-Za-z@]+)(?:\s*\{\})?",
-            lambda c: macros.get(c.group(1), c.group(0)),
-            title,
-        )
+        expanded = re.sub(r"\\([A-Za-z@]+)(?:\s*\{\})?", expand, title)
         if expanded == title:
             break
         title = _drop_commands(expanded, _TITLE_LAYOUT)
-    title = re.sub(r"\\\\(?:\[[^\]]*\])?|~", " ", title)  # line breaks, ties
+    title = breaks.sub(" ", title)
     title = re.sub(r"\\[ ,;:!]|\\(?:quad|qquad|hfill|enspace|enskip|newline|linebreak)\b", " ", title)
     title = re.sub(r"\\[A-Za-z@]+\*?", "", title)  # commands like \\textbf or \\xspace
     title = re.sub(r"[{}$]", "", title)
@@ -1072,7 +1126,8 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
         paper = "\n".join(
             _active_latex(_read_tex(p)) for p in _paper_sources(cleaned, cleaned / main_tex.name)
         )
-        styles = {p.stem.lower(): _read_tex(p) for p in cleaned.rglob("*.sty") if p.is_file()}
+        # \usepackage{name} loads name.sty from the main file's folder.
+        styles = {p.stem.lower(): _active_latex(_read_tex(p)) for p in cleaned.glob("*.sty") if p.is_file()}
         review_version = detect_review_version(paper, styles)
         if review_version:
             warnings.append(f"This looks like a submission version, not a final one: {review_version}.")
