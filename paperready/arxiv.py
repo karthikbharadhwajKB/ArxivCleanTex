@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -762,9 +763,24 @@ class _Macros:
         if name not in self.bodies:
             text, start = self.defined.get(name, (None, 0))
             self.bodies[name] = (
-                _braced(text[start : start + _MACRO_BODY_MAX], 0) if text is not None else _LOGOS.get(name)
+                _braced(text[start : start + _MACRO_BODY_MAX], 0)
+                if text is not None
+                else _LOGOS.get(name) or _greek_letter(name)
             )
         return self.bodies[name]
+
+
+def _greek_letter(name):
+    """The letter a PDF shows for \\mu, \\Gamma, \\varepsilon or \\ell (as in
+    "Scaling μP Transfer"), or None for other commands."""
+    if name == "ell":
+        return "ℓ"
+    letter = name[3:] if name.startswith("var") else name
+    case = "CAPITAL" if letter[:1].isupper() else "SMALL"
+    try:
+        return unicodedata.lookup(f"GREEK {case} LETTER {letter.upper()}")
+    except KeyError:
+        return None
 
 
 def _drop_commands(text, commands):
@@ -792,7 +808,9 @@ def extract_title(text, definitions=""):
     m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", active)
     if not m:
         return ""
-    macros = _Macros(_active_latex(definitions), active)
+    # `definitions` comes last: in clean_zip it is the main file followed by
+    # its \input files, whose \renewcommand s come later in the document.
+    macros = _Macros(active, _active_latex(definitions))
     breaks = re.compile(r"\\\\(?:\[[^\]]*\])?|~")  # line breaks, ties
     raw = _braced(active[m.end() - 1 : m.end() - 1 + _TITLE_MAX], 0)
     title = breaks.sub(" ", _drop_commands(raw, _TITLE_LAYOUT))
@@ -814,7 +832,8 @@ def extract_title(text, definitions=""):
     title = breaks.sub(" ", title)
     title = re.sub(r"\\[ ,;:!]|\\(?:quad|qquad|hfill|enspace|enskip|newline|linebreak)\b", " ", title)
     title = re.sub(r"\\[A-Za-z@]+\*?", "", title)  # commands like \\textbf or \\xspace
-    title = re.sub(r"[{}$]", "", title)
+    title = re.sub(r"(?<!\\)[{}$_^]", "", title)  # groups, math, sub- and superscripts
+    title = re.sub(r"\\([{}$_^&%#])", r"\1", title)  # escaped characters, e.g. \&
     return " ".join(title.split())
 
 

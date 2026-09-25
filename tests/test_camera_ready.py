@@ -93,10 +93,24 @@ def test_extract_title_from_real_papers(tex, definitions, title):
             "\\newcommand{\\model}{FooNet}\\title{Scaling Laws for\\\\model Merging}",
             "Scaling Laws for model Merging",
         ),
+        # Math letters, sub- and superscripts, and escaped characters.
+        ("\\title{Scaling $\\mu$P Transfer}", "Scaling μP Transfer"),
+        ("\\title{Robust $\\ell_1$ Regression}", "Robust ℓ1 Regression"),
+        (
+            "\\title{The $\\beta$-Mixture Prior with $\\Gamma^2$ and $\\varepsilon$}",
+            "The β-Mixture Prior with Γ2 and ε",
+        ),
+        ("\\title{Q\\&A for \\texttt{self\\_instruct}}", "Q&A for self_instruct"),
     ],
 )
 def test_extract_title_prints_what_latex_prints(tex, title):
     assert extract_title(tex) == title
+
+
+def test_a_redefinition_in_an_input_file_wins():
+    # clean_zip passes the main file followed by its \input files.
+    main = "\\newcommand{\\sys}{Old}\\title{\\sys Title}"
+    assert extract_title(main, main + "\n\\renewcommand{\\sys}{New}") == "New Title"
 
 
 def test_self_referencing_macro_stays_cheap():
@@ -207,6 +221,22 @@ class TestSamePaper:
     )
     def test_wrong_pdf_is_not_accepted(self, title, page):
         assert not same_paper(title, page).ok
+
+    @pytest.mark.parametrize(
+        "source, pdf",
+        [
+            ("Scaling μP Transfer", "Scaling µP Transfer\nA. Author\nAbstract\n"),  # micro sign in the PDF
+            ("Robust ℓ1 Regression", "Robust ℓ1 Regression\nA. Author\nAbstract\n"),
+            ("The β-Mixture Prior", "The β-Mixture Prior\nA. Author\nAbstract\n"),
+            ("Scaling P Transfer", "Scaling μP Transfer\nA. Author\nAbstract\n"),  # source lost the symbol
+        ],
+    )
+    def test_math_letters_in_short_titles_match(self, source, pdf):
+        assert same_paper(source, pdf).ok
+
+    def test_extended_abstract_line_above_the_title(self):
+        page = "Extended Abstract\nScaling Laws for Sparse\nMixture of Experts\nA. Author\nAbstract\nWe study"
+        assert same_paper("Scaling Laws for Sparse Mixture of Experts", page).ok
 
     def test_accents_and_ligatures_match(self):
         # The source spells Schr\"{o}dinger and "Efficient"; the PDF has "ö" and the "ﬃ" ligature.

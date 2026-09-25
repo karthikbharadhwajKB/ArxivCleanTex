@@ -17,6 +17,8 @@ _TITLE_MIN_WORDS = 4
 # which PDF text often merges with the other column ("001 Abstract To load…");
 # "Abstractive" doesn't count. Stopping early only makes the header shorter.
 _ABSTRACT_HEADING = re.compile(r"(?<![a-z])abstract(?![a-z])", re.IGNORECASE)
+# Letters a first page has above its "Abstract" heading at the least (a title).
+_HEADER_MIN = 20
 
 
 @dataclass
@@ -61,10 +63,14 @@ def same_version(source_review, pdf_review):
 
 def _header(first_page):
     """The first page above its "Abstract" heading (title, authors), compacted;
-    without a heading, its first 1000 compacted characters."""
-    lines = first_page.splitlines()
-    end = next((i for i, line in enumerate(lines) if _ABSTRACT_HEADING.search(line)), None)
-    return _compact("\n".join(lines[:end])) if end is not None else _compact(first_page)[:1000]
+    without a heading, its first 1000 compacted characters. The title comes
+    first, so a line like "Extended Abstract" at the very top is no heading."""
+    header = ""
+    for line in first_page.splitlines():
+        if _ABSTRACT_HEADING.search(line) and len(header) >= _HEADER_MIN:
+            return header
+        header += _compact(line)
+    return header[:1000]
 
 
 def _in_order(words, text):
@@ -93,14 +99,22 @@ def _mostly_in(title, header):
     return _in_order(words, header) >= _TITLE_WORDS_FOUND * sum(map(len, words))
 
 
+def _exactly_in(title, text):
+    """True if the compacted title is in the compacted `text`, also when only
+    ASCII letters and digits are compared: the source may drop a symbol the PDF
+    prints (e.g. a math letter the title spells with a macro)."""
+    ascii_title = re.sub(r"[^0-9a-z]", "", _compact(title))
+    return _compact(title) in text or (bool(ascii_title) and ascii_title in re.sub(r"[^0-9a-z]", "", text))
+
+
 def _title_on_page(title, first_page):
     """True if the title is at the top of the first page: above the abstract,
     so another paper's abstract that uses the same words doesn't count."""
     if _ABSTRACT_HEADING.search(title):
         # The title's own "Abstract" would end the header early: whole page, exactly.
-        return _compact(title) in _compact(first_page)
+        return _exactly_in(title, _compact(first_page))
     header = _header(first_page)
-    return _compact(title) in header or _mostly_in(title, header)
+    return _exactly_in(title, header) or _mostly_in(title, header)
 
 
 def same_paper(source_title, pdf_first_page):
