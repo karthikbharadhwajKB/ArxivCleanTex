@@ -557,7 +557,10 @@ def _resolve(root, kind, name, graphic_dirs=("",)):
     else:  # ".bib", ".sty", ".cls", ".bst"
         candidates = [name, name + kind]
     for candidate in candidates:
-        if _is_file(root / candidate) and _inside(root / candidate, root):
+        # Plain relative names can't leave `root` (symlinks are removed on upload);
+        # only absolute ones and "../" need the slower check.
+        plain = ":" not in candidate and not candidate.startswith("/") and ".." not in candidate
+        if _is_file(root / candidate) and (plain or _inside(root / candidate, root)):
             return root / candidate
     return None
 
@@ -630,6 +633,13 @@ def _paper_text(root, main_tex):
     Files are told apart by their resolved path: "s1/../a.tex" is "a.tex"."""
     base = root.resolve()
     seen = set()
+    targets = {}  # reference -> resolved file or None, as a paper may load a file many times
+
+    def target_of(name):
+        if name not in targets:
+            target = _resolve(root, "input", name) if _is_literal(name) else None
+            targets[name] = target.resolve() if target is not None else None
+        return targets[name]
 
     def read(tex, depth):
         tex = tex.resolve()
@@ -643,8 +653,8 @@ def _paper_text(root, main_tex):
                 name = name.as_posix()
             else:
                 name = (m.group("braced") or m.group("bare")).strip()
-            target = _resolve(root, "input", name) if _is_literal(name) else None
-            if target is None or target.resolve() in seen or depth >= _LOAD_DEPTH:
+            target = target_of(name)
+            if target is None or target in seen or depth >= _LOAD_DEPTH:
                 return m.group(0)
             return f"{m.group(0)}\n{read(target, depth + 1)}\n"
 
