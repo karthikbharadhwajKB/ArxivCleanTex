@@ -2,6 +2,7 @@ import io
 import os
 import re
 import struct
+import time
 import zipfile
 from pathlib import Path
 
@@ -1314,6 +1315,37 @@ def test_review_switch_in_an_input_file_is_found():
 def test_review_switch_in_other_kinds_of_loaded_files_is_found(load, files):
     main = f"\\documentclass{{article}}{load}\\begin{{document}}Hi\\end{{document}}"
     assert "ACL template's review option" in clean_zip(make_zip({"main.tex": main, **files})).review_version
+
+
+def test_subimport_loops_are_read_once(tmp_path):
+    # "s1/../a" is a.tex again: its path grows at every level, the file doesn't.
+    (tmp_path / "a.tex").write_text("".join(f"\\subimport{{s{i}/../}}{{a}}" for i in (1, 2, 3)))
+    for i in (1, 2, 3):
+        (tmp_path / f"s{i}").mkdir()
+        (tmp_path / f"s{i}" / "x.tex").write_text("x")
+    started = time.monotonic()
+    text = cleaner._paper_text(tmp_path, tmp_path / "a.tex")
+    assert time.monotonic() - started < 2 and len(text) < 1000
+
+
+def test_references_outside_the_upload_are_not_followed(tmp_path):
+    outside = tmp_path / "outside.tex"
+    outside.write_text("\\usepackage[review]{acl}")
+    folder = tmp_path.as_posix()
+    for load in (
+        f"\\input{{{folder}/outside}}",
+        f"\\input {folder}/outside.tex",
+        f"\\import{{{folder}/}}{{outside}}",
+    ):
+        result = clean_zip(make_zip({"main.tex": doc("Hi", load)}))
+        assert result.review_version == ""
+
+
+def test_input_from_the_parent_of_the_main_folder_is_missing_not_a_crash():
+    # arXiv only gets the main file's folder, so ../shared/macros cannot work there.
+    files = {"paper/main.tex": doc("\\input{../shared/macros}"), "shared/macros.tex": "\\newcommand{\\x}{y}"}
+    result = clean_zip(make_zip(files))
+    assert ("main.tex", "../shared/macros") in result.missing_files
 
 
 def test_commented_out_review_option_in_a_style_file_does_not_count():
