@@ -107,10 +107,25 @@ def test_extract_title_prints_what_latex_prints(tex, title):
     assert extract_title(tex) == title
 
 
-def test_a_redefinition_in_an_input_file_wins():
-    # clean_zip passes the main file followed by its \input files.
-    main = "\\newcommand{\\sys}{Old}\\title{\\sys Title}"
-    assert extract_title(main, main + "\n\\renewcommand{\\sys}{New}") == "New Title"
+@pytest.mark.parametrize(
+    "main, macros",
+    [
+        # The \input file redefines the main file's macro …
+        ("\\newcommand{\\x}{Old}\\input{macros}\\title{\\x Paper}", "\\renewcommand{\\x}{New}"),
+        # … or the main file redefines the \input file's macro.
+        ("\\input{macros}\\renewcommand{\\x}{New}\\title{\\x Paper}", "\\newcommand{\\x}{Old}"),
+    ],
+)
+def test_the_last_definition_latex_reads_wins(main, macros):
+    tex = f"\\documentclass{{article}}{main}\\begin{{document}}\\maketitle\\end{{document}}"
+    assert clean_zip(make_zip({"main.tex": tex, "macros.tex": macros})).title == "New Paper"
+
+
+def test_greek_letter_names_that_unicode_spells_differently():
+    assert (
+        extract_title("\\title{Fast $\\lambda$-Calculus and $\\Lambda$ Terms}")
+        == "Fast λ-Calculus and Λ Terms"
+    )
 
 
 def test_self_referencing_macro_stays_cheap():
@@ -234,9 +249,23 @@ class TestSamePaper:
     def test_math_letters_in_short_titles_match(self, source, pdf):
         assert same_paper(source, pdf).ok
 
-    def test_extended_abstract_line_above_the_title(self):
-        page = "Extended Abstract\nScaling Laws for Sparse\nMixture of Experts\nA. Author\nAbstract\nWe study"
+    @pytest.mark.parametrize(
+        "banner",
+        ["Extended Abstract\n", "Published at the Workshop on Efficient Systems 2024\nExtended Abstract\n"],
+    )
+    def test_extended_abstract_banner_above_the_title(self, banner):
+        page = banner + "Scaling Laws for Sparse\nMixture of Experts\nA. Author\nAbstract\nWe study"
         assert same_paper("Scaling Laws for Sparse Mixture of Experts", page).ok
+
+    def test_double_struck_and_bold_math_letters_match(self):
+        # The PDF shows ℝ and 𝐀, which Unicode decomposes to capital R and A.
+        assert same_paper("Q&A over Rn Data with A", "Q&A over ℝn Data with 𝐀\nA. Author\nAbstract\n").ok
+
+    def test_mixed_script_title_needs_its_own_script(self):
+        # Only "BERT" is ASCII: another Russian paper that mentions BERT is no match.
+        page = "Другая статья о BERT\nА. Автор\nАннотация\n"
+        assert not same_paper("Модели BERT для русского языка", page).ok
+        assert same_paper("Модели BERT для русского языка", "Модели BERT для русского языка\nА. Автор\n").ok
 
     def test_accents_and_ligatures_match(self):
         # The source spells Schr\"{o}dinger and "Efficient"; the PDF has "ö" and the "ﬃ" ligature.

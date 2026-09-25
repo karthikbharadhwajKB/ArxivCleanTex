@@ -600,33 +600,43 @@ def _scan_references(root, main_tex):
     return refs, uses_bib
 
 
-# Other ways a paper loads its files: TeX's brace-less \input, and the import
-# package, whose \import{dir}{file} is relative to the main file and whose
-# \subimport{dir}{file} is relative to the file that uses it.
-_INPUT_BARE = re.compile(r"\\input\s+([^\s{}\\%]+)")
-_IMPORT = re.compile(r"\\(sub)?(?:import|includefrom|inputfrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}")
+# Every way a paper loads its files: \input{…}, \include{…}, \subfile{…}, TeX's
+# brace-less \input, and the import package, whose \import{dir}{file} is
+# relative to the main file and whose \subimport{dir}{file} is relative to the
+# file that uses it.
+_LOAD = re.compile(
+    r"\\(?:input|include|subfile)\s*\{(?P<braced>[^}]+)\}"
+    r"|\\input\s+(?P<bare>[^\s{}\\%]+)"
+    r"|\\(?P<sub>sub)?(?:import|includefrom|inputfrom)\*?\s*\{(?P<dir>[^}]*)\}\s*\{(?P<file>[^}]+)\}"
+)
+# Deeper nesting than this is not followed (real papers nest a few levels).
+_LOAD_DEPTH = 20
 
 
-def _paper_sources(root, main_tex):
-    """The LaTeX files of the paper rooted at `main_tex`: itself and every file
-    it \\input s, \\include s or \\import s, in reading order."""
-    files, queue = [], [main_tex]
-    while queue:
-        tex = queue.pop(0)
-        if tex in files:
-            continue
-        files.append(tex)
-        text = _active_latex(_read_tex(tex))
-        names = [m.group(1).strip() for m in (*_INPUT.finditer(text), *_INPUT_BARE.finditer(text))]
+def _paper_text(root, main_tex):
+    """The active LaTeX of the paper rooted at `main_tex`, with each file it
+    loads inlined where it is loaded (once), i.e. in the order LaTeX reads it."""
+    seen = set()
+
+    def read(tex, depth):
+        seen.add(tex)
         here = PurePosixPath(_rel(tex.parent, root)) if tex.parent != root else PurePosixPath()
-        for m in _IMPORT.finditer(text):
-            folder = (here / m.group(2).strip()) if m.group(1) else PurePosixPath(m.group(2).strip())
-            names.append((folder / m.group(3).strip()).as_posix())
-        for name in names:
+
+        def load(m):
+            if m.group("file") is not None:
+                folder = PurePosixPath(m.group("dir").strip())
+                name = ((here / folder) if m.group("sub") else folder) / m.group("file").strip()
+                name = name.as_posix()
+            else:
+                name = (m.group("braced") or m.group("bare")).strip()
             target = _resolve(root, "input", name) if _is_literal(name) else None
-            if target:
-                queue.append(target)
-    return files
+            if target is None or target in seen or depth >= _LOAD_DEPTH:
+                return m.group(0)
+            return f"{m.group(0)}\n{read(target, depth + 1)}\n"
+
+        return _LOAD.sub(load, _active_latex(_read_tex(tex)))
+
+    return read(main_tex, 0)
 
 
 def find_missing_files(root, main_tex, check_bib=True):
@@ -777,8 +787,9 @@ def _greek_letter(name):
         return "ℓ"
     letter = name[3:] if name.startswith("var") else name
     case = "CAPITAL" if letter[:1].isupper() else "SMALL"
+    unicode_name = {"LAMBDA": "LAMDA"}.get(letter.upper(), letter.upper())  # Unicode's spelling
     try:
-        return unicodedata.lookup(f"GREEK {case} LETTER {letter.upper()}")
+        return unicodedata.lookup(f"GREEK {case} LETTER {unicode_name}")
     except KeyError:
         return None
 
@@ -808,8 +819,8 @@ def extract_title(text, definitions=""):
     m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", active)
     if not m:
         return ""
-    # `definitions` comes last: in clean_zip it is the main file followed by
-    # its \input files, whose \renewcommand s come later in the document.
+    # `definitions` comes last: in clean_zip it is the whole paper in reading
+    # order, so the last (re)definition LaTeX reads wins.
     macros = _Macros(active, _active_latex(definitions))
     breaks = re.compile(r"\\\\(?:\[[^\]]*\])?|~")  # line breaks, ties
     raw = _braced(active[m.end() - 1 : m.end() - 1 + _TITLE_MAX], 0)
@@ -1142,9 +1153,7 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
 
         # Only the paper itself: other .tex files next to it (e.g. the ACL
         # template's acl_lualatex.tex) are separate documents.
-        paper = "\n".join(
-            _active_latex(_read_tex(p)) for p in _paper_sources(cleaned, cleaned / main_tex.name)
-        )
+        paper = _paper_text(cleaned, cleaned / main_tex.name)
         # \usepackage{name} loads name.sty from the main file's folder.
         styles = {p.stem.lower(): _active_latex(_read_tex(p)) for p in cleaned.glob("*.sty") if p.is_file()}
         review_version = detect_review_version(paper, styles)
