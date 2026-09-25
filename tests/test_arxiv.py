@@ -1242,6 +1242,80 @@ def test_detect_review_version(text, review):
     assert bool(cleaner.detect_review_version(text)) == review
 
 
+# The option handling of the real acl2023.sty (also used, renamed, by
+# emnlp2021.sty and later *ACL templates): final unless [review] is given.
+ACL2023_STY = (
+    "\\newif\\ifacl@finalcopy\n"
+    "\\DeclareOption{final}{\\acl@finalcopytrue}\n"
+    "\\DeclareOption{review}{\\acl@finalcopyfalse}\n"
+    "\\ExecuteOptions{final} % final copy is the default\n"
+)
+# acl2020.sty and older: anonymous unless the paper says \aclfinalcopy.
+ACL2020_STY = "\\newif\\ifaclfinal\n\\aclfinalfalse\n\\def\\aclfinalcopy{\\global\\aclfinaltrue}\n"
+
+
+@pytest.mark.parametrize(
+    "text, styles, review",
+    [
+        # Self-Instruct (ACL 2023) and SimCSE (EMNLP 2021) as posted on arXiv.
+        ("\\usepackage{acl2023}", {"acl2023": ACL2023_STY}, False),
+        ("\\usepackage{emnlp2021}", {"emnlp2021": ACL2023_STY}, False),
+        # Mission: Impossible (ACL 2024) loads its acl2023.sty in upper case.
+        ("\\usepackage{ACL2023}", {"acl2023": ACL2023_STY}, False),
+        ("\\usepackage[review]{acl2023}", {"acl2023": ACL2023_STY}, True),
+        # Don't Stop Pretraining (ACL 2020) needs \aclfinalcopy.
+        ("\\usepackage[hyperref]{acl2020}", {"acl2020": ACL2020_STY}, True),
+        ("\\usepackage[hyperref]{acl2020}\\aclfinalcopy", {"acl2020": ACL2020_STY}, False),
+    ],
+)
+def test_year_named_acl_styles_follow_the_uploaded_style_file(text, styles, review):
+    assert bool(cleaner.detect_review_version(text, styles)) == review
+
+
+def test_review_option_of_a_year_named_style_names_the_fix():
+    why = cleaner.detect_review_version("\\usepackage[review]{acl2023}", {"acl2023": ACL2023_STY})
+    assert "\\usepackage{acl2023}" in why and "aclfinalcopy" not in why
+
+
+def test_final_paper_next_to_other_template_documents_is_final():
+    # The official ACL template ships acl_lualatex.tex next to acl_latex.tex;
+    # switching acl_latex.tex to [final] must be enough.
+    files = {
+        "acl_latex.tex": doc("\\title{Paper}", "\\usepackage[final]{acl}"),
+        "acl_lualatex.tex": doc("\\title{Paper}", "\\usepackage[review]{acl}"),
+    }
+    result = clean_zip(make_zip(files), main_hint="acl_latex.tex")
+    assert result.review_version == ""
+    assert not any("submission version" in w for w in result.warnings)
+
+
+def test_review_switch_in_an_input_file_is_found():
+    # The CVPR author kit loads its style in \input{preamble}.
+    files = {
+        "main.tex": "\\documentclass{article}\\input{preamble}\\begin{document}Hi\\end{document}",
+        "preamble.tex": "\\usepackage[review]{cvpr}",
+    }
+    assert "cvpr" in clean_zip(make_zip(files)).review_version
+
+
+def test_uploaded_style_file_decides_the_review_check():
+    files = {"main.tex": doc("Hi", "\\usepackage{acl2023}"), "acl2023.sty": ACL2023_STY}
+    assert clean_zip(make_zip(files)).review_version == ""
+
+
+@pytest.mark.parametrize(
+    "stdout, failed",
+    [
+        ("(There were 4 error messages)", True),  # MiKTeX exits with 1 here
+        ("(There was 1 error message)", True),
+        ("(There was 1 warning)", False),
+        ("", False),
+    ],
+)
+def test_bibtex_errors_are_recognised_from_the_output(stdout, failed):
+    assert bool(cleaner._BIBTEX_ERRORS.search(stdout)) == failed
+
+
 def test_review_messages_name_the_fix():
     assert "\\usepackage[preprint]{acl}" in cleaner.detect_review_version("\\usepackage[review]{acl}")
     assert "[accepted]{icml2024}" in cleaner.detect_review_version("\\usepackage{icml2024}")

@@ -4,6 +4,7 @@ import streamlit as st
 
 from paperready import acl, camera_ready
 from views import acl_view, arxiv_view
+from views.acl_view import plural
 
 
 def render():
@@ -35,13 +36,13 @@ def render():
             report.passed,
             "ACL format check passed"
             if report.passed
-            else f"ACL format: {report.error_count} errors to fix (see the ACL tab)",
+            else f"ACL format: {plural(report.error_count, 'error')} to fix (see the ACL tab)",
         ),
         (
             arxiv_problems == 0,
             "Source is ready for arXiv"
             if arxiv_problems == 0
-            else f"arXiv: {arxiv_problems} items to fix (see the arXiv tab)",
+            else f"arXiv: {plural(arxiv_problems, 'item')} to fix (see the arXiv tab)",
         ),
         *((check.ok, check.title) for check in checks),
     ]
