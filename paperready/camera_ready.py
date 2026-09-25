@@ -8,6 +8,9 @@ source uploaded next to a final PDF, or a PDF of a different paper.
 import re
 from dataclasses import dataclass
 
+# Share of the title's letters whose words must appear in the PDF's header.
+_TITLE_WORDS_FOUND = 0.8
+
 
 @dataclass
 class CrossCheck:
@@ -47,6 +50,18 @@ def same_version(source_review, pdf_review):
     return CrossCheck(True, "Source and PDF are both the final version")
 
 
+def _title_in_header(title, first_page):
+    """True if nearly all of the title's words (by length) appear above the
+    abstract of the first page. This tolerates what a source title cannot
+    show, e.g. a macro the PDF prints as "SELF-INSTRUCT", or a venue line."""
+    page = _compact(first_page)
+    end = page.find("abstract") if "abstract" not in _compact(title) else -1
+    header = page[:end] if end > 0 else page[:1000]
+    words = [w for w in map(_compact, re.split(r"[\s/-]+", title)) if len(w) >= 3]
+    total = sum(map(len, words))
+    return total > 0 and sum(len(w) for w in words if w in header) >= _TITLE_WORDS_FOUND * total
+
+
 def same_paper(source_title, pdf_first_page):
     if not source_title:
         return CrossCheck(
@@ -54,7 +69,7 @@ def same_paper(source_title, pdf_first_page):
             "Same paper (not checked)",
             "No \\title was found in the source, so the PDF could not be matched to it.",
         )
-    if _compact(source_title) in _compact(pdf_first_page):
+    if _compact(source_title) in _compact(pdf_first_page) or _title_in_header(source_title, pdf_first_page):
         return CrossCheck(True, "Source and PDF are the same paper")
     return CrossCheck(
         False,

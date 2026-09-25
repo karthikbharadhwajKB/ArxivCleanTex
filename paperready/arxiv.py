@@ -599,6 +599,23 @@ def _scan_references(root, main_tex):
     return refs, uses_bib
 
 
+def _paper_sources(root, main_tex):
+    """The LaTeX files of the paper rooted at `main_tex`: itself and every file
+    it \\input s or \\include s, in reading order."""
+    files, queue = [], [main_tex]
+    while queue:
+        tex = queue.pop(0)
+        if tex in files:
+            continue
+        files.append(tex)
+        for m in _INPUT.finditer(_active_latex(_read_tex(tex))):
+            name = m.group(1).strip()
+            target = _resolve(root, "input", name) if _is_literal(name) else None
+            if target:
+                queue.append(target)
+    return files
+
+
 def find_missing_files(root, main_tex, check_bib=True):
     """Returns (missing, uses_bib) for the paper rooted at `main_tex`.
 
@@ -674,22 +691,90 @@ def _braced(text, start):
     return text[start + 1 :]
 
 
-def extract_title(text):
-    """The paper's \\title{...} as plain text, e.g. for comparing with a PDF."""
-    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", _active_latex(text))
+# Zero-argument macros, e.g. \newcommand{\name}{\textsc{Self-Instruct}} or
+# \def\confName{CVPR}, which papers often use in their \title.
+_MACRO_DEF = re.compile(
+    r"\\(?:(?:re)?newcommand|providecommand)\*?\s*\{?\s*\\([A-Za-z@]+)\s*\}?\s*(?=\{)"
+    r"|\\def\s*\\([A-Za-z@]+)\s*(?=\{)"
+)
+_LOGOS = {"LaTeX": "LaTeX", "LaTeXe": "LaTeX2e", "TeX": "TeX", "BibTeX": "BibTeX"}
+# Commands in a title whose arguments are layout, not title text, with how many
+# {...} arguments they take, e.g. \vspace*{-0.5in} or \includegraphics[...]{logo}.
+_TITLE_LAYOUT = {
+    "includegraphics": 1,
+    "vspace": 1,
+    "hspace": 1,
+    "raisebox": 1,
+    "label": 1,
+    "thanks": 1,
+    "footnote": 1,
+    "footnotemark": 0,
+    "rule": 2,
+    "phantom": 1,
+    "hphantom": 1,
+    "vphantom": 1,
+}
+
+
+def _macros(text):
+    """Zero-argument macros defined in `text`, as {name: body}."""
+    return {m.group(1) or m.group(2): _braced(text, m.end()) for m in _MACRO_DEF.finditer(text)}
+
+
+def _drop_commands(text, commands):
+    """Removes each \\command[...]{...} in `commands` ({name: number of braced
+    arguments}) together with its arguments, which may contain braces."""
+    pattern = re.compile(r"\\(" + "|".join(commands) + r")(?![A-Za-z@])\*?\s*(?:\[[^\]]*\]\s*)?")
+    kept, pos = [], 0
+    while m := pattern.search(text, pos):
+        kept.append(text[pos : m.start()])
+        pos = m.end()
+        for _ in range(commands[m.group(1)]):
+            while pos < len(text) and text[pos].isspace():
+                pos += 1
+            if pos < len(text) and text[pos] == "{":
+                pos += len(_braced(text, pos)) + 2
+    return "".join(kept) + text[pos:]
+
+
+def extract_title(text, definitions=""):
+    """The paper's \\title{...} as plain text, e.g. for comparing with a PDF.
+
+    `definitions` is more LaTeX of the paper (e.g. its \\input files) whose
+    zero-argument macros are expanded in the title, as LaTeX would."""
+    active = _active_latex(text)
+    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", active)
     if not m:
         return ""
-    title = _braced(_active_latex(text), m.end() - 1)
-    title = re.sub(r"\\(?:thanks|footnote)\s*\{[^{}]*\}", "", title)  # footnotes aren't title text
+    macros = {**_LOGOS, **_macros(_active_latex(definitions)), **_macros(active)}
+    title = _drop_commands(_braced(active, m.end() - 1), _TITLE_LAYOUT)
+    for _ in range(3):  # macros may use other macros
+        expanded = re.sub(
+            r"\\([A-Za-z@]+)(?:\s*\{\})?",
+            lambda c: macros.get(c.group(1), c.group(0)),
+            title,
+        )
+        if expanded == title:
+            break
+        title = _drop_commands(expanded, _TITLE_LAYOUT)
     title = re.sub(r"\\\\(?:\[[^\]]*\])?|~", " ", title)  # line breaks, ties
-    title = re.sub(r"\\[A-Za-z@]+\*?", " ", title)  # commands like \\textbf
+    title = re.sub(r"\\[ ,;:!]|\\(?:quad|qquad|hfill|enspace|enskip|newline|linebreak)\b", " ", title)
+    title = re.sub(r"\\[A-Za-z@]+\*?", "", title)  # commands like \\textbf or \\xspace
     title = re.sub(r"[{}$]", "", title)
     return " ".join(title.split())
 
 
-def detect_review_version(text):
-    """Returns why `text` (cleaned LaTeX) is an anonymous or line-numbered
-    submission rather than a final version, with the fix, or "" if it is not."""
+# Since 2021, *ACL style files are final by default and take a [review] option
+# (e.g. acl2023.sty, emnlp2021.sty); older ones need \aclfinalcopy.
+_REVIEW_OPTION = re.compile(r"\\DeclareOption\s*\{review\}")
+
+
+def detect_review_version(text, styles=None):
+    """Returns why `text` (the cleaned LaTeX of the paper) is an anonymous or
+    line-numbered submission rather than a final version, with the fix, or ""
+    if it is not. `styles` maps uploaded style names (lower case, no .sty) to
+    their contents, which tells how a year-named *ACL style is switched."""
+    styles = styles or {}
     for options, _ in _package_options(text, "acl"):
         if "review" in options:
             return (
@@ -697,7 +782,14 @@ def detect_review_version(text):
                 "numbers). Change \\usepackage[review]{acl} to "
                 "\\usepackage[preprint]{acl} (or [final])"
             )
-    for _, name in _package_options(text, r"(?:acl|naacl|eacl|emnlp|aacl|coling)\d{4}"):
+    for options, name in _package_options(text, r"(?i:(?:acl|naacl|eacl|emnlp|aacl|coling)\d{4})"):
+        if _REVIEW_OPTION.search(styles.get(name.lower(), "")):
+            if "review" in options:
+                return (
+                    f"it uses the {name} template's review option (anonymous, with line "
+                    f"numbers). Change \\usepackage[review]{{{name}}} to \\usepackage{{{name}}}"
+                )
+            continue
         if "\\aclfinalcopy" not in text:
             return (
                 f"it uses the {name} template without \\aclfinalcopy, so authors are "
@@ -734,6 +826,7 @@ def detect_review_version(text):
 
 _CITE = re.compile(r"\\(?:no)?cite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}")
 _BIBLATEX = re.compile(r"\\(?:addbibresource|printbibliography)\b")
+_BIBTEX_ERRORS = re.compile(r"\(There (?:was|were) \d+ error messages?\)")
 
 
 def _citations(root, tex, keys, seen):
@@ -817,7 +910,8 @@ def generate_bbl(original_root, cleaned_root, main_name):
         except subprocess.TimeoutExpired:
             return "BibTeX took too long", [], []
         bbl = work / "paper.bbl"
-        if run.returncode > 1 or not bbl.is_file():
+        # TeX Live's BibTeX exits with 2 after errors, MiKTeX's with 1; both count them.
+        if run.returncode > 1 or _BIBTEX_ERRORS.search(run.stdout) or not bbl.is_file():
             if "couldn't open style file" in run.stdout:
                 return f"the style “{styles[-1]}.bst” is not in the zip", [], []
             last = (run.stdout.strip().splitlines() or ["unknown error"])[-1]
@@ -973,9 +1067,13 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
                     f"logs and files) and add {bbl.name} next to {main_tex.name}."
                 )
 
-        review_version = detect_review_version(
-            "\n".join(_active_latex(_read_tex(p)) for p in sorted(cleaned.rglob("*.tex")))
+        # Only the paper itself: other .tex files next to it (e.g. the ACL
+        # template's acl_lualatex.tex) are separate documents.
+        paper = "\n".join(
+            _active_latex(_read_tex(p)) for p in _paper_sources(cleaned, cleaned / main_tex.name)
         )
+        styles = {p.stem.lower(): _read_tex(p) for p in cleaned.rglob("*.sty") if p.is_file()}
+        review_version = detect_review_version(paper, styles)
         if review_version:
             warnings.append(f"This looks like a submission version, not a final one: {review_version}.")
 
@@ -1007,5 +1105,5 @@ def clean_zip(zip_bytes, extra_args=None, main_hint=None, config_bytes=None, mak
             missing_bbl=missing_bbl,
             generated_bbl=generated_bbl,
             review_version=review_version,
-            title=extract_title(_read_tex(cleaned / main_tex.name)),
+            title=extract_title(_read_tex(cleaned / main_tex.name), paper),
         )

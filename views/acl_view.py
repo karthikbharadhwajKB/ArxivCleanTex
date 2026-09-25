@@ -9,6 +9,11 @@ from paperready.core import CleanerError
 from views import feedback_view
 
 
+def plural(count, noun):
+    """“1 error”, “2 errors”."""
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
 def report_markdown(report, file_name, paper_type):
     lines = [f"# ACL format check: {file_name}", "", f"Paper type: {acl.PAPER_TYPES[paper_type]}", ""]
     lines.append("**Passed**" if report.passed else f"**{report.error_count} errors**")
@@ -106,7 +111,8 @@ def show_report(report, upload_name, paper_type):
         st.success("All clear! No formatting errors found.")
     else:
         st.error(
-            f"Found {report.error_count} formatting errors in {len(report.errors)} places. "
+            f"Found {plural(report.error_count, 'formatting error')} in "
+            f"{plural(len(report.errors), 'place')}. "
             "Errors must be fixed before publication."
         )
 

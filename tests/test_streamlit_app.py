@@ -643,8 +643,8 @@ def test_camera_mode_mismatches(upload, fake_check, first_page):
     at = run_camera_mode()
     button(at, "Check and clean my paper").click().run()
     verdict = next(m for m in at.markdown.values if "ACL format:" in m)
-    assert "⚠️ ACL format: 1 errors to fix" in verdict
-    assert "⚠️ arXiv: 1 items to fix" in verdict
+    assert "⚠️ ACL format: 1 error to fix" in verdict
+    assert "⚠️ arXiv: 1 item to fix" in verdict
     assert "⚠️ The source is still the review version" in verdict
     assert "⚠️ The PDF may be a different paper" in verdict
     assert any("Almost there" in m for m in at.markdown.values)
