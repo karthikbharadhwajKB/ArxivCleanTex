@@ -6,10 +6,17 @@ source uploaded next to a final PDF, or a PDF of a different paper.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
-# Share of the title's letters whose words must appear in the PDF's header.
+# Share of the title's letters whose words must appear, in order, in the PDF's
+# header; titles with fewer words must match exactly, as short ones match too easily.
 _TITLE_WORDS_FOUND = 0.8
+_TITLE_MIN_WORDS = 4
+# The line with the "Abstract" heading (ACL, NeurIPS, ICLR, IEEE "Abstract—…"),
+# which PDF text often merges with the other column ("001 Abstract To load…");
+# "Abstractive" doesn't count. Stopping early only makes the header shorter.
+_ABSTRACT_HEADING = re.compile(r"(?<![a-z])abstract(?![a-z])", re.IGNORECASE)
 
 
 @dataclass
@@ -20,9 +27,11 @@ class CrossCheck:
 
 
 def _compact(text):
-    """Lower-case letters and digits only, so PDF text that lost its spaces or
-    hyphenation ("Demo-\\ngraphic", "AnonymousACLsubmission") still matches."""
-    return re.sub(r"[^0-9a-z]", "", text.lower())
+    """Lower-case letters and digits only, without accents and with ligatures
+    spelled out, so PDF text that lost its spaces or hyphenation
+    ("Demo-\\ngraphic", "AnonymousACLsubmission"), or prints "ö" or "ﬃ" where
+    the source has \\"{o} or ffi, still matches."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text.lower()) if ch.isalnum())
 
 
 def same_version(source_review, pdf_review):
@@ -50,26 +59,59 @@ def same_version(source_review, pdf_review):
     return CrossCheck(True, "Source and PDF are both the final version")
 
 
-def _title_in_header(title, first_page):
-    """True if nearly all of the title's words (by length) appear above the
-    abstract of the first page. This tolerates what a source title cannot
-    show, e.g. a macro the PDF prints as "SELF-INSTRUCT", or a venue line."""
-    page = _compact(first_page)
-    end = page.find("abstract") if "abstract" not in _compact(title) else -1
-    header = page[:end] if end > 0 else page[:1000]
+def _header(first_page):
+    """The first page above its "Abstract" heading (title, authors), compacted;
+    without a heading, its first 1000 compacted characters."""
+    lines = first_page.splitlines()
+    end = next((i for i, line in enumerate(lines) if _ABSTRACT_HEADING.search(line)), None)
+    return _compact("\n".join(lines[:end])) if end is not None else _compact(first_page)[:1000]
+
+
+def _in_order(words, text):
+    """The largest total length of `words` that occur in `text` in this order."""
+    frontier = {0: 0}  # where the last matched word ends -> matched length so far
+    for word in words:
+        for end, score in list(frontier.items()):
+            i = text.find(word, end)
+            if i >= 0 and frontier.get(i + len(word), -1) < score + len(word):
+                frontier[i + len(word)] = score + len(word)
+        best, kept = -1, {}
+        for end in sorted(frontier):  # drop states that end later with no more matched
+            if frontier[end] > best:
+                kept[end] = best = frontier[end]
+        frontier = kept
+    return max(frontier.values())
+
+
+def _mostly_in(title, header):
+    """True if nearly all of a long enough title's words (by length) appear in
+    order in the header. This tolerates what a source title cannot show, e.g. a
+    macro the PDF prints as "SELF-INSTRUCT", or a venue line."""
     words = [w for w in map(_compact, re.split(r"[\s/-]+", title)) if len(w) >= 3]
-    total = sum(map(len, words))
-    return total > 0 and sum(len(w) for w in words if w in header) >= _TITLE_WORDS_FOUND * total
+    if len(words) < _TITLE_MIN_WORDS:
+        return False
+    return _in_order(words, header) >= _TITLE_WORDS_FOUND * sum(map(len, words))
+
+
+def _title_on_page(title, first_page):
+    """True if the title is at the top of the first page: above the abstract,
+    so another paper's abstract that uses the same words doesn't count."""
+    if _ABSTRACT_HEADING.search(title):
+        # The title's own "Abstract" would end the header early: whole page, exactly.
+        return _compact(title) in _compact(first_page)
+    header = _header(first_page)
+    return _compact(title) in header or _mostly_in(title, header)
 
 
 def same_paper(source_title, pdf_first_page):
-    if not source_title:
+    if not _compact(source_title):
         return CrossCheck(
             True,
             "Same paper (not checked)",
-            "No \\title was found in the source, so the PDF could not be matched to it.",
+            "No \\title with letters or digits was found in the source, so the PDF "
+            "could not be matched to it.",
         )
-    if _compact(source_title) in _compact(pdf_first_page) or _title_in_header(source_title, pdf_first_page):
+    if _title_on_page(source_title, pdf_first_page):
         return CrossCheck(True, "Source and PDF are the same paper")
     return CrossCheck(
         False,

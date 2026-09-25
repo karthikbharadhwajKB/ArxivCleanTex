@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from helpers import doc, make_zip
@@ -71,6 +73,47 @@ def test_extract_title_from_real_papers(tex, definitions, title):
     assert extract_title(tex, definitions) == title
 
 
+@pytest.mark.parametrize(
+    "tex, title",
+    [
+        # Only the last argument of these commands is printed.
+        (
+            "\\newcommand{\\sys}{\\textcolor{orange}{\\textbf{Sys}}}\\title{\\sys: Fast Inference}",
+            "Sys: Fast Inference",
+        ),
+        (
+            "\\newcommand{\\sys}{\\href{https://github.com/x/sys}{Sys}}\\title{\\sys: Fast Inference}",
+            "Sys: Fast Inference",
+        ),
+        ("\\title{\\resizebox{2cm}{!}{Logo} \\fontsize{20}{24}\\selectfont Big Title}", "Logo Big Title"),
+        # A macro whose body is a line break.
+        ("\\newcommand{\\nl}{\\\\}\\title{Fast\\nl Inference}\\begin{document}Body", "Fast Inference"),
+        # A word after a line break that is also a macro name stays a word.
+        (
+            "\\newcommand{\\model}{FooNet}\\title{Scaling Laws for\\\\model Merging}",
+            "Scaling Laws for model Merging",
+        ),
+    ],
+)
+def test_extract_title_prints_what_latex_prints(tex, title):
+    assert extract_title(tex) == title
+
+
+def test_self_referencing_macro_stays_cheap():
+    # TeX itself would loop forever; the app must not run out of memory.
+    tex = "\\def\\x{" + "\\x" * 1000 + "}\\title{\\x}"
+    started = time.monotonic()
+    title = extract_title(tex)
+    assert time.monotonic() - started < 2 and len(title) < 50_000
+
+
+def test_unbalanced_macros_stay_cheap():
+    tex = "\\def\\a{" * 20_000 + "\\title{" + "\\vspace{" * 20_000
+    started = time.monotonic()
+    extract_title(tex)
+    assert time.monotonic() - started < 5
+
+
 def test_clean_result_has_title():
     result = clean_zip(make_zip({"paper/main.tex": doc("\\title{My Paper}\\maketitle")}))
     assert result.title == "My Paper"
@@ -135,6 +178,55 @@ class TestSamePaper:
     def test_sibling_paper_with_shared_words_does_not_match(self):
         title = "Aya Dataset: An Open-Access Collection for Multilingual Instruction Tuning"
         assert not same_paper(title, self.AYA_ANTHOLOGY).ok
+
+    @pytest.mark.parametrize(
+        "title, page",
+        [
+            # Short titles whose words all occur on another paper's first page.
+            (
+                "Visual Instruction Tuning",
+                "Instruction Tuning for Visual Question Answering\nA. Author\nAbstract\n",
+            ),
+            ("Learning to Reason", "Planning with Language Models\nReasonable Learning Group\nAbstract\n"),
+            # "Abstract" in the title must not let the abstract body count.
+            (
+                "Abstractive Summarization with Pretrained Transformers",
+                "Faithful Summarization\nA. Author\nAbstract\nPretrained transformers with abstractive summarization",
+            ),
+            # Another paper whose own title starts with "Abstract…".
+            (
+                "Summarization with Pretrained Transformers for Long Documents",
+                "Abstractive Methods\nA. Author\nAbstract\nSummarization with pretrained transformers for long documents",
+            ),
+            # The same words in a different order.
+            (
+                "Language Models for Instruction Tuning",
+                "Tuning Instruction for Models Language\nA. Author\nAbstract\n",
+            ),
+        ],
+    )
+    def test_wrong_pdf_is_not_accepted(self, title, page):
+        assert not same_paper(title, page).ok
+
+    def test_accents_and_ligatures_match(self):
+        # The source spells Schr\"{o}dinger and "Efficient"; the PDF has "ö" and the "ﬃ" ligature.
+        assert same_paper(
+            "Schrodinger Bridges for Eﬃcient Sampling", "Schrödinger Bridges for Eﬃcient Sampling"
+        ).ok
+        assert same_paper(
+            "Schrodinger Bridges for Efficient Sampling", "Schrödinger Bridges for Eﬃcient Sampling"
+        ).ok
+
+    def test_titles_in_other_scripts_are_compared(self):
+        assert same_paper("基于大模型的语音识别", "基于大模型的语音识别\n作者").ok
+        assert not same_paper("基于大模型的语音识别", "一个完全不同的标题\n作者").ok
+
+    def test_merged_column_line_ends_the_header(self):
+        # pdfplumber merges the "Abstract" heading with the other column's line.
+        page = (
+            "A Different Title\nSomeAuthor\n001 Abstract Simple contrastive learning of sentence embeddings"
+        )
+        assert not same_paper("Simple Contrastive Learning of Sentence Embeddings", page).ok
 
     def test_words_below_the_abstract_heading_do_not_count(self):
         page = (
