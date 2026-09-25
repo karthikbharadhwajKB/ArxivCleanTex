@@ -16,7 +16,7 @@ _TITLE_MIN_WORDS = 4
 # The line with the "Abstract" heading (ACL, NeurIPS, ICLR, IEEE "Abstract—…"),
 # which PDF text often merges with the other column ("001 Abstract To load…");
 # "Abstractive" doesn't count. Stopping early only makes the header shorter.
-_ABSTRACT_HEADING = re.compile(r"(?<![a-z])abstract(?![a-z])", re.IGNORECASE)
+_ABSTRACT_HEADING = re.compile(r"(?<![a-z])(?<!extended )abstract(?![a-z])", re.IGNORECASE)
 # Letters a first page has above its "Abstract" heading at the least (a title).
 _HEADER_MIN = 20
 
@@ -33,7 +33,8 @@ def _compact(text):
     spelled out, so PDF text that lost its spaces or hyphenation
     ("Demo-\\ngraphic", "AnonymousACLsubmission"), or prints "ö" or "ﬃ" where
     the source has \\"{o} or ffi, still matches."""
-    return "".join(ch for ch in unicodedata.normalize("NFKD", text.lower()) if ch.isalnum())
+    # Lower-case after NFKD: letters like ℝ or 𝐀 decompose to capitals.
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text).lower() if ch.isalnum())
 
 
 def same_version(source_review, pdf_review):
@@ -102,9 +103,15 @@ def _mostly_in(title, header):
 def _exactly_in(title, text):
     """True if the compacted title is in the compacted `text`, also when only
     ASCII letters and digits are compared: the source may drop a symbol the PDF
-    prints (e.g. a math letter the title spells with a macro)."""
-    ascii_title = re.sub(r"[^0-9a-z]", "", _compact(title))
-    return _compact(title) in text or (bool(ascii_title) and ascii_title in re.sub(r"[^0-9a-z]", "", text))
+    prints (e.g. a math letter the title spells with a macro). The ASCII
+    comparison needs a mostly ASCII title, or "Модели BERT" would match any
+    page with "BERT" on it."""
+    compact = _compact(title)
+    ascii_title = re.sub(r"[^0-9a-z]", "", compact)
+    return compact in text or (
+        len(ascii_title) >= _TITLE_WORDS_FOUND * len(compact)
+        and ascii_title in re.sub(r"[^0-9a-z]", "", text)
+    )
 
 
 def _title_on_page(title, first_page):
