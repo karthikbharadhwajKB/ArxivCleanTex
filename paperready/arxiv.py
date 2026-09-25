@@ -531,13 +531,24 @@ def _is_file(path):
         return False
 
 
+def _inside(path, root):
+    """True if `path` really is under `root`, after "..", links and absolute
+    paths are resolved: references like \\input{/etc/hostname} or
+    \\input{../../x} must not reach files outside the upload."""
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _is_literal(name):
     # Skip references built from macros (e.g. \input{\dir/intro}); we can't resolve them.
     return name and "\\" not in name and "#" not in name
 
 
 def _resolve(root, kind, name, graphic_dirs=("",)):
-    """Returns the file a reference points to under `root`, or None."""
+    """Returns the file a reference points to under `root`, or None (also for
+    files outside `root`, which arXiv never gets)."""
     if kind == "input":
         candidates = [name] if PurePosixPath(name).suffix else [name + ".tex"]
         candidates.append(name)
@@ -546,7 +557,7 @@ def _resolve(root, kind, name, graphic_dirs=("",)):
     else:  # ".bib", ".sty", ".cls", ".bst"
         candidates = [name, name + kind]
     for candidate in candidates:
-        if _is_file(root / candidate):
+        if _is_file(root / candidate) and _inside(root / candidate, root):
             return root / candidate
     return None
 
@@ -615,12 +626,15 @@ _LOAD_DEPTH = 20
 
 def _paper_text(root, main_tex):
     """The active LaTeX of the paper rooted at `main_tex`, with each file it
-    loads inlined where it is loaded (once), i.e. in the order LaTeX reads it."""
+    loads inlined where it is loaded (once), i.e. in the order LaTeX reads it.
+    Files are told apart by their resolved path: "s1/../a.tex" is "a.tex"."""
+    base = root.resolve()
     seen = set()
 
     def read(tex, depth):
+        tex = tex.resolve()
         seen.add(tex)
-        here = PurePosixPath(_rel(tex.parent, root)) if tex.parent != root else PurePosixPath()
+        here = PurePosixPath(tex.parent.relative_to(base).as_posix())
 
         def load(m):
             if m.group("file") is not None:
@@ -630,7 +644,7 @@ def _paper_text(root, main_tex):
             else:
                 name = (m.group("braced") or m.group("bare")).strip()
             target = _resolve(root, "input", name) if _is_literal(name) else None
-            if target is None or target in seen or depth >= _LOAD_DEPTH:
+            if target is None or target.resolve() in seen or depth >= _LOAD_DEPTH:
                 return m.group(0)
             return f"{m.group(0)}\n{read(target, depth + 1)}\n"
 
